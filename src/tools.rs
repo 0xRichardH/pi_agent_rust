@@ -2680,6 +2680,15 @@ impl Tool for EditTool {
         let absolute_path =
             crate::extensions::safe_canonicalize(&resolve_read_path(&input.path, &self.cwd));
 
+        let canonical_cwd = crate::extensions::safe_canonicalize(&self.cwd);
+        if !absolute_path.starts_with(&canonical_cwd) {
+            return Err(Error::validation(format!(
+                "Cannot edit outside the working directory (resolved: {}, cwd: {})",
+                absolute_path.display(),
+                canonical_cwd.display()
+            )));
+        }
+
         // Match legacy behavior: any access failure is reported as "File not found".
         if asupersync::fs::OpenOptions::new()
             .read(true)
@@ -2983,6 +2992,15 @@ impl Tool for WriteTool {
         }
 
         let path = crate::extensions::safe_canonicalize(&resolve_path(&input.path, &self.cwd));
+
+        let canonical_cwd = crate::extensions::safe_canonicalize(&self.cwd);
+        if !path.starts_with(&canonical_cwd) {
+            return Err(Error::validation(format!(
+                "Cannot write outside the working directory (resolved: {}, cwd: {})",
+                path.display(),
+                canonical_cwd.display()
+            )));
+        }
 
         // Create parent directories if needed
         if let Some(parent) = path.parent() {
