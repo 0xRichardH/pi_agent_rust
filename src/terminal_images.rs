@@ -219,7 +219,7 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 
         // SOF markers (baseline/progressive and less-common extended variants).
         if is_jpeg_sof_marker(marker) {
-            if seg_len < 7 {
+            if seg_len < 8 {
                 return None;
             }
             let h = u32::from(u16::from_be_bytes([data[i + 3], data[i + 4]]));

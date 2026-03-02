@@ -1535,10 +1535,15 @@ fn read_line_with_limit<R: BufRead>(
     let mut take = reader.take(limit);
     let n = take.read_line(buf)?;
     if n > 0 && take.limit() == 0 && !buf.ends_with('\n') {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Line length exceeds limit of {limit} bytes"),
-        ));
+        // We reached the limit, but this might just be the exact end of the file.
+        // Check if there is more data in the underlying reader.
+        let is_eof = take.into_inner().fill_buf()?.is_empty();
+        if !is_eof {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Line length exceeds limit of {limit} bytes"),
+            ));
+        }
     }
     Ok(n)
 }

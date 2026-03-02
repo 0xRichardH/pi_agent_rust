@@ -169,8 +169,7 @@ pub fn truncate_head(
 ) -> TruncationResult {
     let mut content = content.into();
     let total_bytes = content.len();
-    // Count lines correctly: trailing newline terminates the last line, it doesn't start a
-    // new one. "a\n" -> 1 line. "a\nb" -> 2 lines. "a" -> 1 line. "" -> 0 lines.
+    
     let total_lines = {
         let nl = memchr::memchr_iter(b'\n', content.as_bytes()).count();
         if content.is_empty() {
@@ -182,17 +181,13 @@ pub fn truncate_head(
         }
     };
 
-    // Explicitly honor zero-line budgets.
     if max_lines == 0 {
         let truncated = !content.is_empty();
+        content.truncate(0);
         return TruncationResult {
-            content: String::new(),
+            content,
             truncated,
-            truncated_by: if truncated {
-                Some(TruncatedBy::Lines)
-            } else {
-                None
-            },
+            truncated_by: if truncated { Some(TruncatedBy::Lines) } else { None },
             total_lines,
             total_bytes,
             output_lines: 0,
@@ -203,8 +198,26 @@ pub fn truncate_head(
             max_bytes,
         };
     }
+    
+    if max_bytes == 0 {
+        let truncated = !content.is_empty();
+        let first_line_exceeds_limit = !content.is_empty();
+        content.truncate(0);
+        return TruncationResult {
+            content,
+            truncated,
+            truncated_by: if truncated { Some(TruncatedBy::Bytes) } else { None },
+            total_lines,
+            total_bytes,
+            output_lines: 0,
+            output_bytes: 0,
+            last_line_partial: false,
+            first_line_exceeds_limit,
+            max_lines,
+            max_bytes,
+        };
+    }
 
-    // No truncation needed — reuse the owned String (zero-copy move).
     if total_lines <= max_lines && total_bytes <= max_bytes {
         return TruncationResult {
             content,
@@ -221,62 +234,64 @@ pub fn truncate_head(
         };
     }
 
-    // Check first line length without collecting all lines.
     let first_newline = memchr::memchr(b'\n', content.as_bytes());
     let first_line_bytes = first_newline.unwrap_or(content.len());
+    
     if first_line_bytes > max_bytes {
-        let mut limit = max_bytes;
-        while limit > 0 && !content.is_char_boundary(limit) {
-            limit -= 1;
-        }
-        content.truncate(limit);
+        content.truncate(0);
         return TruncationResult {
             content,
             truncated: true,
             truncated_by: Some(TruncatedBy::Bytes),
             total_lines,
             total_bytes,
-            output_lines: 1,
-            output_bytes: limit,
-            last_line_partial: true,
+            output_lines: 0,
+            output_bytes: 0,
+            last_line_partial: false,
             first_line_exceeds_limit: true,
             max_lines,
             max_bytes,
         };
     }
 
-    // Iterate lines lazily (no Vec allocation), tracking the largest valid prefix.
     let mut line_count = 0;
-    let mut byte_count: usize = 0;
+    let mut byte_count = 0;
     let mut truncated_by = None;
+    let mut current_offset = 0;
 
-    let mut iter = content.split('\n').peekable();
-    let ends_with_newline = content.ends_with('\n');
-    while let Some(line) = iter.next() {
-        let is_last = iter.peek().is_none();
-        if is_last && line.is_empty() && ends_with_newline {
-            break;
-        }
-
+    while current_offset < content.len() {
         if line_count >= max_lines {
             truncated_by = Some(TruncatedBy::Lines);
             break;
         }
 
-        // If there is a next part, it means the current part was followed by a newline.
-        let has_newline = !is_last;
-        let line_len = line.len() + usize::from(has_newline);
+        let next_newline = memchr::memchr(b'\n', &content.as_bytes()[current_offset..]);
+        let line_end_without_nl = match next_newline {
+            Some(idx) => current_offset + idx,
+            None => content.len(),
+        };
+        let line_end_with_nl = match next_newline {
+            Some(idx) => current_offset + idx + 1,
+            None => content.len(),
+        };
 
-        if byte_count + line_len > max_bytes {
+        if line_end_without_nl > max_bytes {
             truncated_by = Some(TruncatedBy::Bytes);
             break;
         }
 
+        if line_end_with_nl > max_bytes {
+            byte_count = line_end_without_nl;
+            line_count += 1;
+            truncated_by = Some(TruncatedBy::Bytes);
+            break;
+        }
+
+        byte_count = line_end_with_nl;
         line_count += 1;
-        byte_count += line_len;
+        current_offset = line_end_with_nl;
     }
 
-    // Truncate in-place — no new allocation, just adjusts the String's length.
     content.truncate(byte_count);
 
     TruncationResult {
@@ -3772,12 +3787,17 @@ impl Tool for FindTool {
         });
 
         let tick = Duration::from_millis(10);
+        let start_time = std::time::Instant::now();
+        let timeout_ms = 60_000; // 60 seconds
 
         loop {
             // Check if process is done
             match guard.try_wait_child() {
                 Ok(Some(_)) => break,
                 Ok(None) => {
+                    if start_time.elapsed().as_millis() > timeout_ms {
+                        return Err(Error::tool("find", "Command timed out after 60 seconds"));
+                    }
                     let now = AgentCx::for_current_or_request()
                         .cx()
                         .timer_driver()
@@ -4954,7 +4974,6 @@ impl Tool for HashlineEditTool {
         let file = std::fs::File::open(&absolute_path)
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot open file: {e}")))?;
         let mut raw_content = String::new();
-        use std::io::Read;
         file.take(READ_TOOL_MAX_BYTES.saturating_add(1))
             .read_to_string(&mut raw_content)
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot read file: {e}")))?;
@@ -4962,7 +4981,7 @@ impl Tool for HashlineEditTool {
         if raw_content.len() as u64 > READ_TOOL_MAX_BYTES {
             return Err(Error::tool(
                 "hashline_edit",
-                format!("File too large (> {} bytes)", READ_TOOL_MAX_BYTES),
+                format!("File too large (> {READ_TOOL_MAX_BYTES} bytes)"),
             ));
         }
 
