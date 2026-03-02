@@ -44,6 +44,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::fs;
 use std::net::IpAddr;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering as StdOrdering};
@@ -10072,7 +10073,6 @@ fn fs_op_read(params: &Value, path: &Path) -> std::result::Result<Value, HostCal
         retryable: None,
     })?;
 
-    use std::io::Read;
     let mut bytes = Vec::new();
     file.take(crate::tools::READ_TOOL_MAX_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)

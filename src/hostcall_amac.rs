@@ -297,7 +297,7 @@ impl AmacStallTelemetry {
                 let diff = sample.elapsed_ns.abs_diff(mean);
                 diff.saturating_mul(diff)
             })
-            .fold(0u64, |acc, val| acc.saturating_add(val))
+            .fold(0u64, u64::saturating_add)
             / n;
         variance
     }

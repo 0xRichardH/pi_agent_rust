@@ -429,16 +429,14 @@ impl<K: Ord + Clone> S3FifoPolicy<K> {
     }
 
     fn decrement_owner(&mut self, owner: &str) {
-        let should_remove = if let Some(count) = self.owner_live_counts.get_mut(owner) {
+        let should_remove = self.owner_live_counts.get_mut(owner).is_some_and(|count| {
             if *count > 1 {
                 *count -= 1;
                 false
             } else {
                 true
             }
-        } else {
-            false
-        };
+        });
         
         if should_remove {
             self.owner_live_counts.remove(owner);
