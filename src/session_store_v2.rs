@@ -1066,25 +1066,26 @@ impl SessionStoreV2 {
                 let frame: SegmentFrame = match serde_json::from_str(json_line) {
                     Ok(frame) => {
                         if missing_newline {
-                            // If we successfully parsed the JSON but the line is missing a newline,
-                            // the atomic write (which includes the newline) did not complete.
-                            // We must discard this frame to ensure the file ends cleanly for future appends.
+                            use std::io::Write;
                             tracing::warn!(
                                 segment = %seg_path.display(),
                                 line_number,
-                                "SessionStoreV2 dropping valid but newline-missing frame during index rebuild; truncating segment and dropping subsequent segments"
+                                "SessionStoreV2 encountered valid frame missing trailing newline; healing segment"
                             );
-                            drop(reader);
-                            truncate_file_to(seg_path, byte_offset)?;
-                            for (_, path) in &segment_files[i + 1..] {
-                                let _ = fs::remove_file(path);
-                            }
-                            break 'segments;
+                            let mut f = fs::OpenOptions::new().append(true).open(seg_path)?;
+                            f.write_all(b"\n")?;
                         }
                         frame
                     }
                     Err(err) => {
                         let at_eof = reader.fill_buf()?.is_empty();
+                        if !at_eof || !missing_newline {
+                            return Err(Error::session(format!(
+                                "failed to parse segment frame while rebuilding index (corruption in segment {}): {}",
+                                seg_path.display(),
+                                err
+                            )));
+                        }
                         tracing::warn!(
                             segment = %seg_path.display(),
                             line_number,
