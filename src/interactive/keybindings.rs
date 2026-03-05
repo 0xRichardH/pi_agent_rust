@@ -2,6 +2,25 @@ use super::commands::model_entry_matches;
 use super::*;
 
 impl PiApp {
+    pub(super) fn handle_custom_extension_key(&mut self, key: &KeyMsg) -> bool {
+        if !self.extension_custom_active {
+            return false;
+        }
+        if key.key_type == KeyType::CtrlC {
+            return false;
+        }
+
+        if let Some(encoded) = encode_custom_ui_key(key) {
+            const MAX_CUSTOM_KEY_QUEUE: usize = 256;
+            if self.extension_custom_key_queue.len() >= MAX_CUSTOM_KEY_QUEUE {
+                let _ = self.extension_custom_key_queue.pop_front();
+            }
+            self.extension_custom_key_queue.push_back(encoded);
+        }
+
+        true
+    }
+
     /// Format keyboard shortcuts for /hotkeys display.
     ///
     /// Groups actions by category and shows their key bindings.
@@ -911,6 +930,66 @@ impl PiApp {
     }
 }
 
+fn encode_custom_ui_key(key: &KeyMsg) -> Option<String> {
+    let control = |byte: u8| Some(char::from(byte).to_string());
+    match key.key_type {
+        KeyType::Runes => {
+            if key.runes.is_empty() {
+                None
+            } else {
+                let text: String = key.runes.iter().collect();
+                if key.alt {
+                    Some(format!("\u{1b}{text}"))
+                } else {
+                    Some(text)
+                }
+            }
+        }
+        KeyType::Space => Some(" ".to_string()),
+        KeyType::Enter | KeyType::ShiftEnter | KeyType::CtrlEnter | KeyType::CtrlShiftEnter => {
+            Some("\r".to_string())
+        }
+        KeyType::Tab => Some("\t".to_string()),
+        KeyType::ShiftTab => Some("\u{1b}[Z".to_string()),
+        KeyType::Esc => Some("\u{1b}".to_string()),
+        KeyType::Backspace | KeyType::CtrlH => Some("\u{7f}".to_string()),
+        KeyType::Up => Some("\u{1b}[A".to_string()),
+        KeyType::Down => Some("\u{1b}[B".to_string()),
+        KeyType::Right => Some("\u{1b}[C".to_string()),
+        KeyType::Left => Some("\u{1b}[D".to_string()),
+        KeyType::Home => Some("\u{1b}[H".to_string()),
+        KeyType::End => Some("\u{1b}[F".to_string()),
+        KeyType::PgUp => Some("\u{1b}[5~".to_string()),
+        KeyType::PgDown => Some("\u{1b}[6~".to_string()),
+        KeyType::Delete => Some("\u{1b}[3~".to_string()),
+        KeyType::Insert => Some("\u{1b}[2~".to_string()),
+        KeyType::CtrlA => control(0x01),
+        KeyType::CtrlB => control(0x02),
+        KeyType::CtrlD => control(0x04),
+        KeyType::CtrlE => control(0x05),
+        KeyType::CtrlF => control(0x06),
+        KeyType::CtrlG => control(0x07),
+        KeyType::CtrlJ => control(0x0a),
+        KeyType::CtrlK => control(0x0b),
+        KeyType::CtrlL => control(0x0c),
+        KeyType::CtrlN => control(0x0e),
+        KeyType::CtrlO => control(0x0f),
+        KeyType::CtrlP => control(0x10),
+        KeyType::CtrlQ => control(0x11),
+        KeyType::CtrlR => control(0x12),
+        KeyType::CtrlS => control(0x13),
+        KeyType::CtrlT => control(0x14),
+        KeyType::CtrlU => control(0x15),
+        KeyType::CtrlV => control(0x16),
+        KeyType::CtrlW => control(0x17),
+        KeyType::CtrlX => control(0x18),
+        KeyType::CtrlY => control(0x19),
+        KeyType::CtrlZ => control(0x1a),
+        KeyType::Null => control(0x00),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1168,5 +1247,33 @@ mod tests {
                 .is_some_and(|msg| msg.contains("Missing credentials for provider acme-remote")),
             "blank inline keys must not bypass credential checks"
         );
+    }
+
+    #[test]
+    fn custom_extension_key_handler_queues_rune_input_when_active() {
+        let current = model_entry("openai", "gpt-4o-mini", Some("old-key"), HashMap::new());
+        let mut app = build_test_app(current.clone(), vec![current]);
+        app.extension_custom_active = true;
+
+        let consumed = app.handle_custom_extension_key(&KeyMsg::from_char('w'));
+        assert!(consumed, "custom overlay should consume key input");
+        assert_eq!(
+            app.extension_custom_key_queue.pop_front().as_deref(),
+            Some("w")
+        );
+    }
+
+    #[test]
+    fn custom_extension_key_handler_preserves_ctrl_c_for_global_exit() {
+        let current = model_entry("openai", "gpt-4o-mini", Some("old-key"), HashMap::new());
+        let mut app = build_test_app(current.clone(), vec![current]);
+        app.extension_custom_active = true;
+
+        let consumed = app.handle_custom_extension_key(&KeyMsg::from_type(KeyType::CtrlC));
+        assert!(
+            !consumed,
+            "Ctrl+C should remain available for normal global handling"
+        );
+        assert!(app.extension_custom_key_queue.is_empty());
     }
 }

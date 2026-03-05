@@ -113,10 +113,11 @@ use self::perf::{
 use self::state::TOOL_AUTO_COLLAPSE_THRESHOLD;
 pub use self::state::{AgentState, InputMode, PendingInput};
 use self::state::{
-    AutocompleteState, BranchPickerOverlay, CapabilityAction, CapabilityPromptOverlay, HistoryList,
-    InjectedMessageQueue, InteractiveMessageQueue, PendingLoginKind, PendingOAuth,
-    QueuedMessageKind, SessionPickerOverlay, SettingsUiEntry, SettingsUiState,
-    TOOL_COLLAPSE_PREVIEW_LINES, ThemePickerItem, ThemePickerOverlay, ToolProgress, format_count,
+    AutocompleteState, BranchPickerOverlay, CapabilityAction, CapabilityPromptOverlay,
+    ExtensionCustomOverlay, HistoryList, InjectedMessageQueue, InteractiveMessageQueue,
+    PendingLoginKind, PendingOAuth, QueuedMessageKind, SessionPickerOverlay, SettingsUiEntry,
+    SettingsUiState, TOOL_COLLAPSE_PREVIEW_LINES, ThemePickerItem, ThemePickerOverlay,
+    ToolProgress, format_count,
 };
 pub use self::state::{ConversationMessage, MessageRole};
 #[cfg(test)]
@@ -1220,7 +1221,7 @@ pub enum PiMsg {
         status: String,
         diagnostics: Option<String>,
     },
-    /// Extension UI request (select/confirm/input/editor/notify).
+    /// Extension UI request (select/confirm/input/editor/custom/notify).
     ExtensionUiRequest(ExtensionUiRequest),
     /// Extension command finished execution.
     ExtensionCommandDone {
@@ -1337,6 +1338,9 @@ pub struct PiApp {
     extension_compacting: Arc<AtomicBool>,
     extension_ui_queue: VecDeque<ExtensionUiRequest>,
     active_extension_ui: Option<ExtensionUiRequest>,
+    extension_custom_overlay: Option<ExtensionCustomOverlay>,
+    extension_custom_active: bool,
+    extension_custom_key_queue: VecDeque<String>,
 
     // Status message (for slash command feedback)
     status_message: Option<String>,
@@ -1590,6 +1594,9 @@ impl PiApp {
             extension_compacting: extension_compacting.clone(),
             extension_ui_queue: VecDeque::new(),
             active_extension_ui: None,
+            extension_custom_overlay: None,
+            extension_custom_active: false,
+            extension_custom_key_queue: VecDeque::new(),
             status_message: None,
             save_enabled,
             abort_handle: None,
@@ -1814,6 +1821,10 @@ impl PiApp {
             self.status_message = None;
             if key.key_type != KeyType::Esc {
                 self.last_escape_time = None;
+            }
+
+            if self.handle_custom_extension_key(key) {
+                return None;
             }
 
             // /tree modal captures all input while active.

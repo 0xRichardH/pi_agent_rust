@@ -487,6 +487,11 @@ impl PiApp {
             output.push_str(&self.render_capability_prompt(prompt));
         }
 
+        // Extension custom overlay (if open)
+        if let Some(ref overlay) = self.extension_custom_overlay {
+            output.push_str(&self.render_extension_custom_overlay(overlay));
+        }
+
         // Branch picker overlay (if open)
         if let Some(ref picker) = self.branch_picker {
             output.push_str(&self.render_branch_picker(picker));
@@ -503,6 +508,7 @@ impl PiApp {
             && self.settings_ui.is_none()
             && self.theme_picker.is_none()
             && self.capability_prompt.is_none()
+            && self.extension_custom_overlay.is_none()
             && self.branch_picker.is_none()
             && self.model_selector.is_none()
         {
@@ -1503,6 +1509,52 @@ impl PiApp {
             self.styles
                 .muted_italic
                 .render("←/→/Tab: navigate  Enter: confirm  Esc: deny")
+        );
+
+        output
+    }
+
+    pub(super) fn render_extension_custom_overlay(
+        &self,
+        overlay: &ExtensionCustomOverlay,
+    ) -> String {
+        let mut output = String::new();
+        let title = overlay.title.as_deref().unwrap_or("Extension Overlay");
+        let source = overlay.extension_id.as_deref().unwrap_or("extension");
+
+        let _ = writeln!(output, "\n  {}", self.styles.title.render(title));
+        let _ = writeln!(
+            output,
+            "  {}",
+            self.styles
+                .muted
+                .render(&format!("[{source}] custom UI active"))
+        );
+
+        let max_lines = self.term_height.saturating_sub(12).max(4);
+        if overlay.lines.is_empty() {
+            let _ = writeln!(
+                output,
+                "  {}",
+                self.styles
+                    .muted_italic
+                    .render("Waiting for extension frame...")
+            );
+        } else {
+            for line in overlay
+                .lines
+                .iter()
+                .skip(overlay.lines.len().saturating_sub(max_lines))
+            {
+                let _ = writeln!(output, "  {line}");
+            }
+        }
+        let _ = writeln!(
+            output,
+            "  {}",
+            self.styles
+                .muted_italic
+                .render("Press q to exit extension overlays that support quit")
         );
 
         output

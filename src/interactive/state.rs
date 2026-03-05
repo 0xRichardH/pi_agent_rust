@@ -606,6 +606,17 @@ impl CapabilityPromptOverlay {
     }
 }
 
+/// Runtime state for extension-driven `ui.custom()` overlays.
+#[derive(Debug, Clone, Default)]
+pub(super) struct ExtensionCustomOverlay {
+    /// Extension that owns the active custom overlay.
+    pub(super) extension_id: Option<String>,
+    /// Optional overlay title.
+    pub(super) title: Option<String>,
+    /// Latest rendered frame lines.
+    pub(super) lines: Vec<String>,
+}
+
 /// Branch picker overlay for quick branch switching (Ctrl+B).
 #[derive(Debug)]
 pub(super) struct BranchPickerOverlay {

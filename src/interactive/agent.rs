@@ -52,6 +52,8 @@ async fn dispatch_input_event(
 
 const UI_STREAM_DELTA_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(45);
 const UI_STREAM_DELTA_MAX_BUFFER_BYTES: usize = 2 * 1024;
+const EXTENSION_CUSTOM_WIDGET_KEY: &str = "__pi_custom_overlay";
+const EXTENSION_CUSTOM_MIN_WIDTH: usize = 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StreamDeltaKind {
@@ -577,6 +579,9 @@ impl PiApp {
                     thinking: None,
                     collapsed: false,
                 });
+                self.extension_custom_active = false;
+                self.extension_custom_key_queue.clear();
+                self.extension_custom_overlay = None;
                 self.scroll_to_bottom();
                 self.input.focus();
 
@@ -607,6 +612,10 @@ impl PiApp {
             self.capability_prompt = Some(CapabilityPromptOverlay::from_request(request));
             return None;
         }
+        if request.method == "custom" {
+            self.handle_custom_extension_ui_request(request);
+            return None;
+        }
         if request.expects_response() {
             self.extension_ui_queue.push_back(request);
             self.advance_extension_ui_queue();
@@ -616,107 +625,290 @@ impl PiApp {
         None
     }
 
-    fn apply_extension_ui_effect(&mut self, request: &ExtensionUiRequest) {
-        match request.method.as_str() {
-            "notify" => {
-                let title = request
+    fn handle_custom_extension_ui_request(&mut self, request: ExtensionUiRequest) {
+        let mode = request
+            .payload
+            .get("mode")
+            .or_else(|| request.payload.get("phase"))
+            .and_then(Value::as_str)
+            .unwrap_or("poll");
+        let closing = mode.eq_ignore_ascii_case("close")
+            || request
+                .payload
+                .get("close")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+
+        if closing {
+            self.extension_custom_active = false;
+            self.extension_custom_overlay = None;
+            self.extension_custom_key_queue.clear();
+        } else {
+            self.extension_custom_active = true;
+            if self.extension_custom_overlay.is_none() {
+                self.extension_custom_overlay = Some(ExtensionCustomOverlay::default());
+            }
+            if let Some(overlay) = self.extension_custom_overlay.as_mut() {
+                overlay.extension_id.clone_from(&request.extension_id);
+                overlay.title = request
                     .payload
                     .get("title")
                     .and_then(Value::as_str)
-                    .unwrap_or("Notification");
-                let message = request
-                    .payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let level = request
-                    .payload
-                    .get("level")
-                    .and_then(Value::as_str)
-                    .or_else(|| request.payload.get("notifyType").and_then(Value::as_str))
-                    .or_else(|| request.payload.get("notify_type").and_then(Value::as_str))
-                    .unwrap_or("info");
-                self.messages.push(ConversationMessage {
-                    role: MessageRole::System,
-                    content: format!("Extension notify ({level}): {title} {message}"),
-                    thinking: None,
-                    collapsed: false,
-                });
-                self.scroll_to_bottom();
+                    .map(std::string::ToString::to_string);
             }
-            "setStatus" | "set_status" => {
-                let status_text = request
-                    .payload
-                    .get("statusText")
-                    .and_then(Value::as_str)
-                    .or_else(|| request.payload.get("status_text").and_then(Value::as_str))
-                    .or_else(|| request.payload.get("text").and_then(Value::as_str))
-                    .unwrap_or("");
-                if !status_text.is_empty() {
-                    let status_key = request
-                        .payload
-                        .get("statusKey")
-                        .and_then(Value::as_str)
-                        .or_else(|| request.payload.get("status_key").and_then(Value::as_str))
-                        .unwrap_or("");
+        }
 
-                    self.status_message = Some(if status_key.is_empty() {
-                        status_text.to_string()
-                    } else {
-                        format!("{status_key}: {status_text}")
-                    });
-                }
-            }
-            "setWidget" | "set_widget" => {
-                let widget_key = request
-                    .payload
-                    .get("widgetKey")
-                    .and_then(Value::as_str)
-                    .or_else(|| request.payload.get("widget_key").and_then(Value::as_str))
-                    .unwrap_or("widget");
+        let mut response = serde_json::Map::new();
+        let width = self.custom_overlay_width_from_payload(&request.payload);
+        response.insert(
+            "width".to_string(),
+            Value::from(u64::try_from(width).unwrap_or(80)),
+        );
+        if let Some(key) = self.extension_custom_key_queue.pop_front() {
+            response.insert("key".to_string(), Value::String(key));
+        }
+        if !self.extension_custom_active {
+            response.insert("closed".to_string(), Value::Bool(true));
+        }
 
-                let content = request
-                    .payload
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string)
-                    .or_else(|| {
-                        request
-                            .payload
-                            .get("widgetLines")
-                            .or_else(|| request.payload.get("widget_lines"))
-                            .or_else(|| request.payload.get("lines"))
-                            .and_then(Value::as_array)
-                            .map(|items| {
-                                items
-                                    .iter()
-                                    .filter_map(Value::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            })
-                    });
+        self.send_extension_ui_response(ExtensionUiResponse {
+            id: request.id,
+            value: Some(Value::Object(response)),
+            cancelled: false,
+        });
+    }
 
-                if let Some(content) = content {
-                    self.messages.push(ConversationMessage {
-                        role: MessageRole::System,
-                        content: format!("Extension widget ({widget_key}):\n{content}"),
-                        thinking: None,
-                        collapsed: false,
-                    });
-                    self.scroll_to_bottom();
-                }
+    fn custom_overlay_width_from_payload(&self, payload: &Value) -> usize {
+        fn parse_percent_basis_points(raw: &str) -> Option<u32> {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return None;
             }
-            "setTitle" | "set_title" => {
-                if let Some(title) = request.payload.get("title").and_then(Value::as_str) {
-                    self.status_message = Some(format!("Title: {title}"));
-                }
+
+            let mut parts = trimmed.split('.');
+            let whole_part = parts.next()?;
+            let frac_part = parts.next();
+            if parts.next().is_some() || whole_part.is_empty() {
+                return None;
             }
-            "set_editor_text" => {
-                if let Some(text) = request.payload.get("text").and_then(Value::as_str) {
-                    self.input.set_value(text);
-                }
+            if !whole_part.chars().all(|ch| ch.is_ascii_digit()) {
+                return None;
             }
+
+            let whole = whole_part.parse::<u32>().ok()?;
+            let mut basis_points = whole.checked_mul(100)?;
+
+            if let Some(frac_part) = frac_part {
+                if !frac_part.chars().all(|ch| ch.is_ascii_digit()) {
+                    return None;
+                }
+                let mut digits = frac_part.chars();
+                let first = digits.next().and_then(|ch| ch.to_digit(10)).unwrap_or(0);
+                let second = digits.next().and_then(|ch| ch.to_digit(10)).unwrap_or(0);
+                let third = digits.next().and_then(|ch| ch.to_digit(10)).unwrap_or(0);
+
+                let mut fractional = first * 10 + second;
+                if third >= 5 {
+                    fractional = fractional.saturating_add(1);
+                }
+                basis_points = basis_points.checked_add(fractional)?;
+            }
+
+            Some(basis_points)
+        }
+
+        fn parse_width_spec(spec: &Value, base: usize) -> Option<usize> {
+            match spec {
+                Value::Number(num) => num
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0),
+                Value::String(raw) => {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        return None;
+                    }
+                    if let Some(percent) = trimmed.strip_suffix('%') {
+                        let basis_points = parse_percent_basis_points(percent)?;
+                        if basis_points == 0 {
+                            return None;
+                        }
+                        let base = u128::try_from(base).ok()?;
+                        let width = base
+                            .checked_mul(u128::from(basis_points))?
+                            .checked_add(5_000)?
+                            / 10_000;
+                        let width = usize::try_from(width).ok()?;
+                        return Some(width.max(1));
+                    }
+                    trimmed.parse::<usize>().ok().filter(|n| *n > 0)
+                }
+                _ => None,
+            }
+        }
+
+        let base = self
+            .term_width
+            .saturating_sub(4)
+            .max(EXTENSION_CUSTOM_MIN_WIDTH);
+        let spec = payload
+            .pointer("/overlayOptions/width")
+            .or_else(|| payload.get("width"));
+        spec.and_then(|value| parse_width_spec(value, base))
+            .unwrap_or(base)
+            .max(EXTENSION_CUSTOM_MIN_WIDTH)
+    }
+
+    fn apply_extension_ui_effect(&mut self, request: &ExtensionUiRequest) {
+        match request.method.as_str() {
+            "notify" => self.apply_extension_notify_effect(request),
+            "setStatus" | "set_status" => self.apply_extension_status_effect(request),
+            "setWidget" | "set_widget" => self.apply_extension_widget_effect(request),
+            "setTitle" | "set_title" => self.apply_extension_title_effect(request),
+            "set_editor_text" => self.apply_extension_editor_text_effect(request),
             _ => {}
+        }
+    }
+
+    fn apply_extension_notify_effect(&mut self, request: &ExtensionUiRequest) {
+        let title = request
+            .payload
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Notification");
+        let message = request
+            .payload
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let level = request
+            .payload
+            .get("level")
+            .and_then(Value::as_str)
+            .or_else(|| request.payload.get("notifyType").and_then(Value::as_str))
+            .or_else(|| request.payload.get("notify_type").and_then(Value::as_str))
+            .unwrap_or("info");
+        self.messages.push(ConversationMessage {
+            role: MessageRole::System,
+            content: format!("Extension notify ({level}): {title} {message}"),
+            thinking: None,
+            collapsed: false,
+        });
+        self.scroll_to_bottom();
+    }
+
+    fn apply_extension_status_effect(&mut self, request: &ExtensionUiRequest) {
+        let status_text = request
+            .payload
+            .get("statusText")
+            .and_then(Value::as_str)
+            .or_else(|| request.payload.get("status_text").and_then(Value::as_str))
+            .or_else(|| request.payload.get("text").and_then(Value::as_str))
+            .unwrap_or("");
+        if status_text.is_empty() {
+            return;
+        }
+
+        let status_key = request
+            .payload
+            .get("statusKey")
+            .and_then(Value::as_str)
+            .or_else(|| request.payload.get("status_key").and_then(Value::as_str))
+            .unwrap_or("");
+
+        self.status_message = Some(if status_key.is_empty() {
+            status_text.to_string()
+        } else {
+            format!("{status_key}: {status_text}")
+        });
+    }
+
+    fn apply_extension_widget_effect(&mut self, request: &ExtensionUiRequest) {
+        let widget_key = request
+            .payload
+            .get("widgetKey")
+            .and_then(Value::as_str)
+            .or_else(|| request.payload.get("widget_key").and_then(Value::as_str))
+            .unwrap_or("widget");
+
+        let lines = request
+            .payload
+            .get("widgetLines")
+            .or_else(|| request.payload.get("widget_lines"))
+            .or_else(|| request.payload.get("lines"))
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if widget_key == EXTENSION_CUSTOM_WIDGET_KEY {
+            self.apply_custom_overlay_widget_effect(request, lines);
+            return;
+        }
+
+        let content = request
+            .payload
+            .get("content")
+            .and_then(Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| (!lines.is_empty()).then(|| lines.join("\n")));
+
+        if let Some(content) = content {
+            self.messages.push(ConversationMessage {
+                role: MessageRole::System,
+                content: format!("Extension widget ({widget_key}):\n{content}"),
+                thinking: None,
+                collapsed: false,
+            });
+            self.scroll_to_bottom();
+        }
+    }
+
+    fn apply_custom_overlay_widget_effect(
+        &mut self,
+        request: &ExtensionUiRequest,
+        lines: Vec<String>,
+    ) {
+        let should_clear = request
+            .payload
+            .get("clear")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if should_clear || lines.is_empty() {
+            self.extension_custom_overlay = None;
+            if should_clear {
+                self.extension_custom_active = false;
+                self.extension_custom_key_queue.clear();
+            }
+            return;
+        }
+
+        self.extension_custom_active = true;
+        self.extension_custom_overlay = Some(ExtensionCustomOverlay {
+            extension_id: request.extension_id.clone(),
+            title: request
+                .payload
+                .get("title")
+                .and_then(Value::as_str)
+                .map(std::string::ToString::to_string),
+            lines,
+        });
+    }
+
+    fn apply_extension_title_effect(&mut self, request: &ExtensionUiRequest) {
+        if let Some(title) = request.payload.get("title").and_then(Value::as_str) {
+            self.status_message = Some(format!("Title: {title}"));
+        }
+    }
+
+    fn apply_extension_editor_text_effect(&mut self, request: &ExtensionUiRequest) {
+        if let Some(text) = request.payload.get("text").and_then(Value::as_str) {
+            self.input.set_value(text);
         }
     }
 
@@ -735,6 +927,11 @@ impl PiApp {
             return;
         }
         if let Some(next) = self.extension_ui_queue.pop_front() {
+            if next.method == "custom" {
+                self.handle_custom_extension_ui_request(next);
+                self.advance_extension_ui_queue();
+                return;
+            }
             let prompt = format_extension_ui_prompt(&next);
             self.active_extension_ui = Some(next);
             self.messages.push(ConversationMessage {
