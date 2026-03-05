@@ -1,2 +1,10 @@
-{"type":"scanner","project":"/data/projects/pi_agent_rust/src","language":"rust","files":105,"critical":332,"warning":26723,"info":11628,"timestamp":"2026-02-28T00:28:17Z"}
-{"type":"totals","project":"/data/projects/pi_agent_rust/src","files":105,"critical":332,"warning":26723,"info":11628,"timestamp":"2026-02-27 18:28:17"}
+ℹ Scan size after ignores: 10MB (limit 1000MB)
+ℹ Created filtered scan workspace at /tmp/tmp.vnieKBcBfk/scan
+UBS Meta-Runner v5.0.7  2026-03-04 18:38:56
+Project: /data/projects/pi_agent_rust/src
+Format:  jsonl
+Detected: rust
+Scanning rust...
+Finished rust (43s)
+{"type":"scanner","project":"/data/projects/pi_agent_rust/src","language":"rust","files":105,"critical":309,"warning":26159,"info":11691,"timestamp":"2026-03-05T00:39:40Z"}
+{"type":"totals","project":"/data/projects/pi_agent_rust/src","files":105,"critical":309,"warning":26159,"info":11691,"timestamp":"2026-03-04 18:39:40"}
