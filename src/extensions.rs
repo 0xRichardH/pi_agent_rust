@@ -12370,7 +12370,7 @@ impl ExtensionUiRequest {
     pub fn expects_response(&self) -> bool {
         matches!(
             self.method.as_str(),
-            "select" | "confirm" | "input" | "editor"
+            "select" | "confirm" | "input" | "editor" | "custom"
         )
     }
 
@@ -29526,6 +29526,15 @@ mod tests {
         assert_eq!(event["method"], "notify");
         assert_eq!(event["title"], "Hello");
         assert_eq!(event["message"], "World");
+    }
+
+    #[test]
+    fn extension_ui_custom_expects_response() {
+        let request = ExtensionUiRequest::new("req-1", "custom", json!({}));
+        assert!(
+            request.expects_response(),
+            "custom UI hostcalls must be response-bearing"
+        );
     }
 
     #[test]

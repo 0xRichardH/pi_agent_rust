@@ -16082,10 +16082,192 @@ function __pi_build_extension_ui_template(hasUI) {
                 text: String(text === undefined || text === null ? '' : text),
             }).catch(() => {});
         },
-        custom: (_component, options) => {
-            if (!hasUI) return Promise.resolve(undefined);
-            const payload = options && typeof options === 'object' ? options : {};
-            return pi.ui('custom', payload);
+        custom: async (componentFactory, options) => {
+            if (!hasUI) return undefined;
+            const opts = options && typeof options === 'object' ? options : {};
+            if (typeof componentFactory !== 'function') {
+                return pi.ui('custom', opts);
+            }
+
+            const widgetKey = '__pi_custom_overlay';
+            const parseWidth = (value, fallback) => {
+                if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+                    return Math.max(20, Math.floor(value));
+                }
+                if (typeof value === 'string') {
+                    const text = value.trim();
+                    if (!text) return fallback;
+                    if (text.endsWith('%')) {
+                        const pct = Number.parseFloat(text.slice(0, -1));
+                        if (Number.isFinite(pct) && pct > 0) {
+                            return Math.max(20, Math.floor((fallback * pct) / 100));
+                        }
+                        return fallback;
+                    }
+                    const parsed = Number.parseInt(text, 10);
+                    if (Number.isFinite(parsed) && parsed > 0) {
+                        return Math.max(20, parsed);
+                    }
+                }
+                return fallback;
+            };
+            const fallbackWidth = parseWidth(
+                opts.width ?? (opts.overlayOptions && opts.overlayOptions.width),
+                80
+            );
+
+            let done = false;
+            let doneValue = undefined;
+            let renderWidth = fallbackWidth;
+            let needsRender = true;
+            let renderInFlight = false;
+            let pollInFlight = false;
+            let component = null;
+            let renderTimer = null;
+            let pollTimer = null;
+
+            const theme = (this && this.theme) || __pi_make_extension_theme();
+            const keybindings = {};
+            const onDone = (value) => {
+                done = true;
+                doneValue = value;
+            };
+            const tui = {
+                requestRender: () => {
+                    needsRender = true;
+                },
+            };
+
+            const toKittyRelease = (keyData) => {
+                if (typeof keyData !== 'string' || keyData.length === 0) return null;
+                if (keyData.length !== 1) return null;
+                const ch = keyData;
+                if (ch >= 'A' && ch <= 'Z') {
+                    const code = ch.toLowerCase().charCodeAt(0);
+                    return `\u001b[${code};2:3u`;
+                }
+                return `\u001b[${ch.charCodeAt(0)};1:3u`;
+            };
+
+            const disposeComponent = () => {
+                if (component && typeof component.dispose === 'function') {
+                    try {
+                        component.dispose();
+                    } catch (_) {}
+                }
+            };
+
+            const pushFrame = async () => {
+                if (!component || typeof component.render !== 'function') return;
+                let lines = [];
+                try {
+                    const rendered = component.render(renderWidth);
+                    if (Array.isArray(rendered)) {
+                        lines = rendered.map((line) =>
+                            String(line === undefined || line === null ? '' : line)
+                        );
+                    } else if (rendered !== undefined && rendered !== null) {
+                        lines = String(rendered).split('\n');
+                    }
+                } catch (_) {
+                    done = true;
+                    return;
+                }
+                await pi
+                    .ui('setWidget', {
+                        widgetKey,
+                        lines,
+                        title:
+                            typeof opts.title === 'string'
+                                ? opts.title
+                                : (opts.overlay ? 'Extension Overlay' : undefined),
+                    })
+                    .catch(() => {});
+            };
+
+            const handlePollResponse = (response) => {
+                if (!response || typeof response !== 'object') return;
+                if (typeof response.width === 'number' && Number.isFinite(response.width)) {
+                    renderWidth = Math.max(20, Math.floor(response.width));
+                }
+                if (response.closed || response.cancelled) {
+                    done = true;
+                    return;
+                }
+                const keyData = typeof response.key === 'string' ? response.key : null;
+                if (keyData && component && typeof component.handleInput === 'function') {
+                    try {
+                        component.handleInput(keyData);
+                        const release = toKittyRelease(keyData);
+                        if (release) {
+                            component.handleInput(release);
+                        }
+                    } catch (_) {
+                        done = true;
+                        return;
+                    }
+                    needsRender = true;
+                }
+            };
+
+            const pollInput = () => {
+                if (done || pollInFlight) return;
+                pollInFlight = true;
+                void pi
+                    .ui('custom', {
+                        ...opts,
+                        mode: 'poll',
+                        widgetKey,
+                    })
+                    .then(handlePollResponse)
+                    .catch(() => {})
+                    .finally(() => {
+                        pollInFlight = false;
+                    });
+            };
+
+            try {
+                component = componentFactory(tui, theme, keybindings, onDone);
+            } catch (err) {
+                disposeComponent();
+                throw err;
+            }
+
+            renderTimer = setInterval(() => {
+                if (done || renderInFlight || !needsRender) return;
+                needsRender = false;
+                renderInFlight = true;
+                void pushFrame().finally(() => {
+                    renderInFlight = false;
+                });
+            }, 1000 / 30);
+
+            pollTimer = setInterval(() => {
+                pollInput();
+            }, 16);
+
+            pollInput();
+            await pushFrame();
+
+            while (!done) {
+                await __pi_sleep(16);
+            }
+
+            if (renderTimer) clearInterval(renderTimer);
+            if (pollTimer) clearInterval(pollTimer);
+            disposeComponent();
+
+            await pi.ui('setWidget', { widgetKey, clear: true, lines: [] }).catch(() => {});
+            await pi
+                .ui('custom', {
+                    ...opts,
+                    mode: 'close',
+                    close: true,
+                    widgetKey,
+                })
+                .catch(() => {});
+
+            return doneValue;
         },
     };
 }

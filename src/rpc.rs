@@ -2163,6 +2163,38 @@ fn rpc_parse_extension_ui_response(
                 cancelled: false,
             })
         }
+        "custom" => {
+            if let Some(value) = parsed.get("value") {
+                return Ok(ExtensionUiResponse {
+                    id: active.id.clone(),
+                    value: Some(value.clone()),
+                    cancelled: false,
+                });
+            }
+
+            let mut payload = serde_json::Map::new();
+            if let Some(key) = parsed.get("key").and_then(Value::as_str) {
+                payload.insert("key".to_string(), Value::String(key.to_string()));
+            }
+            if let Some(width) = parsed.get("width").and_then(Value::as_u64) {
+                payload.insert("width".to_string(), Value::from(width));
+            }
+            if let Some(close) = parsed
+                .get("cancelled")
+                .or_else(|| parsed.get("closed"))
+                .and_then(Value::as_bool)
+            {
+                payload.insert("closed".to_string(), Value::Bool(close));
+            }
+            if payload.is_empty() {
+                return Err("custom requires `value`, `key`, `width`, or `cancelled`".to_string());
+            }
+            Ok(ExtensionUiResponse {
+                id: active.id.clone(),
+                value: Some(Value::Object(payload)),
+                cancelled: false,
+            })
+        }
         "notify" => Ok(ExtensionUiResponse {
             id: active.id.clone(),
             value: None,
@@ -2274,6 +2306,24 @@ mod ui_bridge_tests {
         let resp = rpc_parse_extension_ui_response(&val, &active).expect("notify ok");
         assert!(!resp.cancelled);
         assert!(resp.value.is_none());
+    }
+
+    #[test]
+    fn parse_custom_accepts_value_passthrough() {
+        let active = ExtensionUiRequest::new("req-1", "custom", json!({}));
+        let val = json!({"requestId":"req-1","value":{"key":"w","width":88}});
+        let resp = rpc_parse_extension_ui_response(&val, &active).expect("custom value");
+        assert_eq!(resp.value, Some(json!({"key":"w","width":88})));
+        assert!(!resp.cancelled);
+    }
+
+    #[test]
+    fn parse_custom_accepts_key_width_fields() {
+        let active = ExtensionUiRequest::new("req-1", "custom", json!({}));
+        let val = json!({"requestId":"req-1","key":"q","width":120});
+        let resp = rpc_parse_extension_ui_response(&val, &active).expect("custom key+width");
+        assert_eq!(resp.value, Some(json!({"key":"q","width":120})));
+        assert!(!resp.cancelled);
     }
 
     #[test]
