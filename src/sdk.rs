@@ -1789,7 +1789,10 @@ mod tests {
         .expect("compact");
 
         assert!(
-            events.lock().expect("events lock").is_empty(),
+            events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
             "expected no compaction lifecycle events for empty session"
         );
     }
@@ -1818,7 +1821,10 @@ mod tests {
 
         let recv_clone = Arc::clone(&received);
         let id = listeners.subscribe(Arc::new(move |event| {
-            recv_clone.lock().expect("lock").push(event);
+            recv_clone
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(event);
         }));
 
         let event = AgentEvent::AgentStart {
@@ -1826,7 +1832,9 @@ mod tests {
         };
         listeners.notify(&event);
 
-        let events = received.lock().expect("lock");
+        let events = received
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert_eq!(events.len(), 1);
 
         // Verify unsubscribe
@@ -1835,7 +1843,13 @@ mod tests {
         listeners.notify(&AgentEvent::AgentStart {
             session_id: "test-456".into(),
         });
-        assert_eq!(received.lock().expect("lock").len(), 1);
+        assert_eq!(
+            received
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1852,20 +1866,30 @@ mod tests {
 
         let ca = Arc::clone(&count_a);
         listeners.subscribe(Arc::new(move |_| {
-            *ca.lock().expect("lock") += 1;
+            *ca.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         }));
 
         let cb = Arc::clone(&count_b);
         listeners.subscribe(Arc::new(move |_| {
-            *cb.lock().expect("lock") += 1;
+            *cb.lock().unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
         }));
 
         listeners.notify(&AgentEvent::AgentStart {
             session_id: "s".into(),
         });
 
-        assert_eq!(*count_a.lock().expect("lock"), 1);
-        assert_eq!(*count_b.lock().expect("lock"), 1);
+        assert_eq!(
+            *count_a
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
+        assert_eq!(
+            *count_b
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            1
+        );
     }
 
     #[test]
@@ -1884,7 +1908,9 @@ mod tests {
 
         let e = Arc::clone(&ends);
         listeners.on_tool_end = Some(Arc::new(move |name, _output, is_error| {
-            e.lock().expect("lock").push((name.to_string(), is_error));
+            e.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((name.to_string(), is_error));
         }));
 
         let args = serde_json::json!({"path": "/foo"});
@@ -1897,14 +1923,18 @@ mod tests {
         listeners.notify_tool_end("bash", &output, false);
 
         {
-            let s = starts.lock().expect("lock");
+            let s = starts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(s.len(), 1);
             assert_eq!(s[0].0, "bash");
             drop(s);
         }
 
         {
-            let e = ends.lock().expect("lock");
+            let e = ends
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(e.len(), 1);
             assert_eq!(e[0].0, "bash");
             assert!(!e[0].1);
@@ -1919,7 +1949,9 @@ mod tests {
 
         let r = Arc::clone(&received);
         listeners.on_stream_event = Some(Arc::new(move |ev| {
-            r.lock().expect("lock").push(format!("{ev:?}"));
+            r.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(format!("{ev:?}"));
         }));
 
         let event = StreamEvent::TextDelta {
@@ -1928,7 +1960,13 @@ mod tests {
         };
         listeners.notify_stream_event(&event);
 
-        assert_eq!(received.lock().expect("lock").len(), 1);
+        assert_eq!(
+            received
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1941,14 +1979,21 @@ mod tests {
             working_directory: Some(tmp.path().to_path_buf()),
             no_session: true,
             on_event: Some(Arc::new(move |event| {
-                r.lock().expect("lock").push(format!("{event:?}"));
+                r.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("{event:?}"));
             })),
             ..SessionOptions::default()
         };
 
         let handle = run_async(create_agent_session(options)).expect("create session");
         // Verify the listener was registered
-        let count = handle.listeners().subscribers.lock().expect("lock").len();
+        let count = handle
+            .listeners()
+            .subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
         assert_eq!(
             count, 1,
             "on_event from SessionOptions should register one subscriber"
@@ -1967,13 +2012,23 @@ mod tests {
         let handle = run_async(create_agent_session(options)).expect("create session");
         let id = handle.subscribe(|_event| {});
         assert_eq!(
-            handle.listeners().subscribers.lock().expect("lock").len(),
+            handle
+                .listeners()
+                .subscribers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
             1
         );
 
         assert!(handle.unsubscribe(id));
         assert_eq!(
-            handle.listeners().subscribers.lock().expect("lock").len(),
+            handle
+                .listeners()
+                .subscribers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
             0
         );
 

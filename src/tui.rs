@@ -754,7 +754,13 @@ mod tests {
 
         pi_console.render_markdown("# Title\n\n- Item 1\n- Item 2\n\n**bold**");
 
-        let output = String::from_utf8(buffer.lock().expect("lock buffer").clone()).expect("utf-8");
+        let output = String::from_utf8(
+            buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        )
+        .expect("utf-8");
 
         assert!(
             output.contains("\u{1b}["),

@@ -2045,7 +2045,10 @@ mod tests {
             let pin_ready_for_thread = Arc::clone(&pin_ready);
             let release_pin_for_thread = Arc::clone(&release_pin);
             let pin_thread = thread::spawn(move || {
-                let pin = queue_for_pin.lock().expect("lock queue").pin_epoch();
+                let pin = queue_for_pin
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pin_epoch();
                 pin_ready_for_thread.store(true, LoomOrdering::SeqCst);
                 while !release_pin_for_thread.load(LoomOrdering::SeqCst) {
                     thread::yield_now();
@@ -2060,7 +2063,9 @@ mod tests {
                     thread::yield_now();
                 }
 
-                let mut queue = queue_for_worker.lock().expect("lock queue");
+                let mut queue = queue_for_worker
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let _ = queue.push_back(1_u8);
                 let _ = queue.push_back(2_u8);
                 let drained = queue.drain_all();
@@ -2077,7 +2082,9 @@ mod tests {
             release_pin.store(true, LoomOrdering::SeqCst);
             pin_thread.join().expect("pin thread join");
 
-            let mut queue = queue.lock().expect("lock queue");
+            let mut queue = queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             queue.force_reclaim();
             let snapshot = queue.snapshot();
             assert_eq!(snapshot.retired_backlog, 0);
@@ -2101,20 +2108,26 @@ mod tests {
 
             let queue_a = Arc::clone(&queue);
             let producer_a = thread::spawn(move || {
-                let mut queue = queue_a.lock().expect("lock queue");
+                let mut queue = queue_a
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let _ = queue.push_back(10_u8);
             });
 
             let queue_b = Arc::clone(&queue);
             let producer_b = thread::spawn(move || {
-                let mut queue = queue_b.lock().expect("lock queue");
+                let mut queue = queue_b
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let _ = queue.push_back(11_u8);
             });
 
             producer_a.join().expect("producer_a join");
             producer_b.join().expect("producer_b join");
 
-            let mut queue = queue.lock().expect("lock queue");
+            let mut queue = queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let drained = queue.drain_all();
             drop(queue);
             let mut values = drained.into_iter().collect::<Vec<_>>();

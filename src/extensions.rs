@@ -30790,7 +30790,10 @@ mod tests {
 
     impl CaptureLayer {
         fn snapshot(&self) -> Vec<CapturedEvent> {
-            self.events.lock().expect("events mutex").clone()
+            self.events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
     }
 
@@ -30871,7 +30874,10 @@ mod tests {
     fn extension_manager_no_persisted_permissions() -> ExtensionManager {
         let manager = ExtensionManager::new();
         {
-            let mut guard = manager.inner.lock().expect("extension manager lock");
+            let mut guard = manager
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             // Unit tests should be deterministic and should never mutate the user's
             // global permissions file.
             guard.permission_store = None;
