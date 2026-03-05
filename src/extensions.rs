@@ -26775,7 +26775,7 @@ impl ExtensionManager {
         self.read_snapshot().active_tools.clone()
     }
 
-    #[allow(clippy::significant_drop_tightening)]
+    #[allow(clippy::significant_drop_tightening, clippy::too_many_lines)]
     pub async fn load_js_extensions(&self, specs: Vec<JsExtensionLoadSpec>) -> Result<()> {
         let runtime = self
             .runtime()

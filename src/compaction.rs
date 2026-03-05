@@ -297,7 +297,7 @@ fn estimate_context_tokens(messages: &[SessionMessage]) -> ContextUsageEstimate 
     let trailing_tokens = messages[usage_index + 1..]
         .iter()
         .map(estimate_tokens)
-        .fold(0u64, |acc, val| acc.saturating_add(val));
+        .fold(0u64, u64::saturating_add);
     ContextUsageEstimate {
         tokens: usage_tokens.saturating_add(trailing_tokens),
         last_usage_index: Some(usage_index),

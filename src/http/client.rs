@@ -17,6 +17,7 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use futures::stream::{self, BoxStream};
 use std::pin::Pin;
+#[cfg(not(test))]
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
 
@@ -33,7 +34,7 @@ fn default_request_timeout_from_env() -> Option<std::time::Duration> {
     {
         // Disable timeouts in unit tests to prevent `asupersync`'s virtual timer
         // from instantly fast-forwarding and failing mock server requests.
-        return None;
+        None
     }
 
     #[cfg(not(test))]
@@ -369,7 +370,7 @@ impl Response {
                 return Err(Error::api("Request timed out reading body"));
             }
 
-            let sleep_fut = sleep(asupersync_now, timeout - elapsed).fuse();
+            let sleep_fut = sleep(asupersync_now, timeout.checked_sub(elapsed).unwrap_or_default()).fuse();
             let read_fut = read_fut.fuse();
             futures::pin_mut!(sleep_fut, read_fut);
 

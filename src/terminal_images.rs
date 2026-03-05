@@ -156,7 +156,8 @@ pub fn placeholder(mime_type: &str, width: Option<u32>, height: Option<u32>) -> 
 /// Returns `(width, height)` or `None` if the format is unrecognized.
 pub fn image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     // PNG: width at bytes 16..20, height at 20..24 (big-endian).
-    if data.len() >= 24 && data.starts_with(b"\x89PNG\r\n\x1A\n") {
+    // Valid PNGs must have the IHDR chunk immediately following the signature.
+    if data.len() >= 24 && data.starts_with(b"\x89PNG\r\n\x1A\n") && &data[12..16] == b"IHDR" {
         let w = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
         let h = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
         return Some((w, h));

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 use uuid::Uuid;
 

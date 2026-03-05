@@ -41,7 +41,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn provider_ids_match(left: &str, right: &str) -> bool {
     let left = left.trim();
@@ -3541,7 +3541,7 @@ async fn run_bash_rpc(
     let now_drain = asupersync::Cx::current()
         .and_then(|cx| cx.timer_driver())
         .map_or_else(wall_now, |timer| timer.now());
-    let drain_deadline = now_drain + std::time::Duration::from_millis(2000);
+    let drain_deadline = now_drain + std::time::Duration::from_secs(2);
     let mut drain_timed_out = false;
     loop {
         match rx.try_recv() {
@@ -3883,6 +3883,7 @@ async fn cycle_model_for_rpc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
     use crate::auth::AuthCredential;
     use crate::model::{
         ContentBlock, ImageContent, TextContent, ThinkingLevel, UserContent, UserMessage,
