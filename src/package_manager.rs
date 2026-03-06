@@ -261,11 +261,9 @@ impl PackageManager {
         match parsed {
             ParsedSource::Npm { spec, .. } => self.install_npm(&spec, scope),
             ParsedSource::Git {
+                clone_source,
                 host, path, r#ref, ..
-            } => {
-                let clone_source = git_clone_source(source, &self.cwd);
-                self.install_git(&clone_source, &host, &path, r#ref.as_deref(), scope)
-            }
+            } => self.install_git(&clone_source, &host, &path, r#ref.as_deref(), scope),
             ParsedSource::Local { path } => {
                 if path.exists() {
                     Ok(())
@@ -335,10 +333,10 @@ impl PackageManager {
                 }
             }
             ParsedSource::Git {
+                clone_source,
                 host, path, pinned, ..
             } => {
                 if !pinned {
-                    let clone_source = git_clone_source(source, &self.cwd);
                     self.update_git(&clone_source, &host, &path, scope)?;
                 }
             }
@@ -1010,6 +1008,7 @@ impl PackageManager {
                 path,
                 r#ref,
                 pinned,
+                ..
             } => {
                 let installed_path = self.git_install_path(&host, &path, scope);
                 if !installed_path.exists() {
@@ -2686,6 +2685,7 @@ enum ParsedSource {
         pinned: bool,
     },
     Git {
+        clone_source: String,
         repo: String,
         host: String,
         path: String,
@@ -2902,6 +2902,7 @@ fn parse_git_source(spec: &str, cwd: &Path) -> ParsedSource {
     let (repo_raw, parsed_ref) = split_git_spec_ref(spec);
     let r#ref = parsed_ref.map(str::to_string);
     let pinned = r#ref.is_some();
+    let clone_source = git_clone_source(spec, cwd);
 
     let (repo, host, path) = if looks_like_local_path(repo_raw) {
         let repo_path = local_path_from_spec(repo_raw, cwd);
@@ -2923,6 +2924,7 @@ fn parse_git_source(spec: &str, cwd: &Path) -> ParsedSource {
     };
 
     ParsedSource::Git {
+        clone_source,
         repo,
         host,
         path,
@@ -4915,12 +4917,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         match parse_source("git:github.com/user/repo@v2", dir.path()) {
             ParsedSource::Git {
+                clone_source,
                 repo,
                 host,
                 path,
                 r#ref,
                 pinned,
             } => {
+                assert_eq!(clone_source, "github.com/user/repo");
                 assert_eq!(repo, "github.com/user/repo");
                 assert_eq!(host, "github.com");
                 assert_eq!(path, "user/repo");
@@ -4951,12 +4955,14 @@ mod tests {
             dir.path(),
         ) {
             ParsedSource::Git {
+                clone_source,
                 repo,
                 host,
                 path,
                 r#ref,
                 pinned,
             } => {
+                assert_eq!(clone_source, "https://token@github.com/user/repo.git");
                 assert_eq!(repo, "github.com/user/repo");
                 assert_eq!(host, "github.com");
                 assert_eq!(path, "user/repo");
@@ -5000,7 +5006,20 @@ mod tests {
         let result1 = parse_git_source("./local-repo", dir.path());
         let result2 = parse_git_source("./local-repo", dir.path());
         match (&result1, &result2) {
-            (ParsedSource::Git { path: p1, .. }, ParsedSource::Git { path: p2, .. }) => {
+            (
+                ParsedSource::Git {
+                    clone_source: clone_a,
+                    path: p1,
+                    ..
+                },
+                ParsedSource::Git {
+                    clone_source: clone_b,
+                    path: p2,
+                    ..
+                },
+            ) => {
+                assert_eq!(clone_a, &dir.path().join("local-repo").to_string_lossy());
+                assert_eq!(clone_b, &dir.path().join("local-repo").to_string_lossy());
                 assert_eq!(p1, p2, "same local source should produce same hash");
             }
             _ => panic!(),
