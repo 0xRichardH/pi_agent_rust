@@ -19026,8 +19026,7 @@ fn named_flat_extension_initializer_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r"(?m)\bexport\s+(?:async\s+)?function\s+{names}\b|\bexport\s+(?:const|let|var)\s+{names}\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)",
-            names = FLAT_EXTENSION_INITIALIZER_NAMES
+            r"(?m)\bexport\s+(?:async\s+)?function\s+{FLAT_EXTENSION_INITIALIZER_NAMES}\b|\bexport\s+(?:const|let|var)\s+{FLAT_EXTENSION_INITIALIZER_NAMES}\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)"
         ))
         .expect("named flat extension initializer regex")
     })
@@ -19037,8 +19036,7 @@ fn default_object_flat_extension_initializer_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(&format!(
-            r#"(?ms)\bexport\s+default\s*\{{.*?(?:\b(?:async\s+)?{names}\s*\(|\b{names}\s*:\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)|["'`]{names}["'`]\s*(?:\(|:\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)))"#,
-            names = FLAT_EXTENSION_INITIALIZER_NAMES
+            r#"(?ms)\bexport\s+default\s*\{{.*?(?:\b(?:async\s+)?{FLAT_EXTENSION_INITIALIZER_NAMES}\s*\(|\b{FLAT_EXTENSION_INITIALIZER_NAMES}\s*:\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)|["'`]{FLAT_EXTENSION_INITIALIZER_NAMES}["'`]\s*(?:\(|:\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)))"#
         ))
         .expect("default object flat extension initializer regex")
     })

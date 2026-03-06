@@ -374,15 +374,15 @@ fn val_i64(params: &[Val], idx: usize, label: &str) -> anyhow::Result<i64> {
     }
 }
 
-fn set_i32_result(results: &mut [Val], value: i32) {
-    if let Some(slot) = results.first_mut() {
-        *slot = Val::I32(value);
+const fn set_i32_result(results: &mut [Val], value: i32) {
+    if !results.is_empty() {
+        results[0] = Val::I32(value);
     }
 }
 
-fn set_f64_result(results: &mut [Val], value: f64) {
-    if let Some(slot) = results.first_mut() {
-        *slot = Val::F64(value.to_bits());
+const fn set_f64_result(results: &mut [Val], value: f64) {
+    if !results.is_empty() {
+        results[0] = Val::F64(value.to_bits());
     }
 }
 
@@ -411,6 +411,7 @@ fn stub_import(
 
 /// Register the small host import surface PiWasm currently supports.
 /// Any unsupported imports fall back to no-op/default stubs.
+#[allow(clippy::too_many_lines)]
 fn register_host_imports(
     linker: &mut Linker<WasmHostData>,
     module: &WasmModule,
@@ -480,13 +481,13 @@ fn register_host_imports(
                                 let pnum = usize::try_from(val_i32(params, 3, "pnum")?)
                                     .map_err(|_| anyhow!("Negative pnum pointer"))?;
 
-                                let (path, mut position) = match caller.data().open_files.get(&fd) {
-                                    Some(handle) => (handle.path.clone(), handle.position),
-                                    None => {
+                                let (path, mut position) =
+                                    if let Some(handle) = caller.data().open_files.get(&fd) {
+                                        (handle.path.clone(), handle.position)
+                                    } else {
                                         set_i32_result(results, 8);
                                         return Ok(());
-                                    }
-                                };
+                                    };
 
                                 let mut total = 0_usize;
                                 for index in 0..iovcnt {
@@ -558,12 +559,11 @@ fn register_host_imports(
                                         .map_err(|_| anyhow!("Negative newOffset pointer"))?;
 
                                 let (path, current_position) =
-                                    match caller.data().open_files.get(&fd) {
-                                        Some(handle) => (handle.path.clone(), handle.position),
-                                        None => {
-                                            set_i32_result(results, 8);
-                                            return Ok(());
-                                        }
+                                    if let Some(handle) = caller.data().open_files.get(&fd) {
+                                        (handle.path.clone(), handle.position)
+                                    } else {
+                                        set_i32_result(results, 8);
+                                        return Ok(());
                                     };
                                 let Some(file_len) = caller
                                     .data()
@@ -721,7 +721,7 @@ fn register_host_imports(
                                         u64::try_from(needed_pages).unwrap_or(u64::MAX),
                                     )
                                     .is_ok();
-                                set_i32_result(results, if grown { 1 } else { 0 });
+                                set_i32_result(results, i32::from(grown));
                                 Ok(())
                             },
                         )
@@ -974,7 +974,7 @@ pub(crate) fn inject_wasm_globals(
         )?;
     }
 
-    // ---- __pi_wasm_memory_read_native(instance_id, mem_name, offset, len) → ArrayBuffer ----
+    // ---- __pi_wasm_memory_read_native(instance_id, mem_name, offset, len) → byte array ----
     {
         let st = Rc::clone(state);
         global.set(
@@ -1206,7 +1206,7 @@ const WASM_POLYFILL_JS: &str = r#"
         })(exp.name);
       } else if (exp.kind === "memory") {
         (function(name) {
-          var memObj = {};
+          var memObj = Object.create(WebAssembly.Memory.prototype);
           Object.defineProperty(memObj, "buffer", {
             get: function() {
               __pi_wasm_get_buffer_native(instanceId, name);
@@ -1873,6 +1873,31 @@ mod tests {
                 )
                 .expect("polyfill memory buffer");
             assert_eq!(size, 65536);
+        });
+    }
+
+    #[test]
+    fn js_polyfill_exported_memory_is_webassembly_memory() {
+        let wasm_bytes = wat_to_wasm(r#"(module (memory (export "memory") 1))"#);
+        run_wasm_test(|ctx, _state| {
+            let arr = rquickjs::Array::new(ctx.clone()).unwrap();
+            for (i, &b) in wasm_bytes.iter().enumerate() {
+                arr.set(i, i32::from(b)).unwrap();
+            }
+            ctx.globals().set("__test_bytes", arr).unwrap();
+
+            let is_memory: bool = ctx
+                .eval(
+                    r#"
+                    var __is_memory = false;
+                    WebAssembly.instantiate(__test_bytes).then(function(r) {
+                        __is_memory = r.instance.exports.memory instanceof WebAssembly.Memory;
+                    });
+                    __is_memory;
+                "#,
+                )
+                .expect("exported memory instanceof WebAssembly.Memory");
+            assert!(is_memory);
         });
     }
 

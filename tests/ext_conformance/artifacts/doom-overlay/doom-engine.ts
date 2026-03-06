@@ -18,7 +18,7 @@ type PiWasmHost = typeof globalThis & {
 		memoryName: string,
 		offset: number,
 		length: number,
-	) => ArrayBuffer;
+	) => ArrayLike<number>;
 	__pi_wasm_memory_write_native?: (
 		instanceId: number,
 		memoryName: string,
