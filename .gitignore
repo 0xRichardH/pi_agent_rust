@@ -144,3 +144,12 @@ filter_panics.py
 /print_env.rs
 src/bin/test_duration.rs
 src/bin/test_time.rs
+
+# Ephemeral test output and scratch binaries
+/test.jsonl
+/test_heal
+/test_heal.txt
+/ubs.jsonl
+
+# Codex cargo home (build cache)
+.codex-cargo-home/
