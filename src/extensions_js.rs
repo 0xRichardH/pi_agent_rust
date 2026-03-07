@@ -57,7 +57,6 @@ use swc_ecma_codegen::{Emitter, text_writer::JsWriter};
 use swc_ecma_parser::{Parser as SwcParser, StringInput, Syntax, TsSyntax};
 use swc_ecma_transforms_base::resolver;
 use swc_ecma_transforms_typescript::strip;
-use uuid::Uuid;
 
 // ============================================================================
 // Environment variable filtering (bd-1av0.9)
@@ -14199,7 +14198,8 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                                 len,
                                 "crypto random bytes"
                             );
-                            Ok(random_bytes(len))
+                            random_bytes(len)
+                                .map_err(|err| map_crypto_entropy_error("randomBytes", err))
                         },
                     ),
                 )?;
@@ -14925,14 +14925,29 @@ fn hex_lower(bytes: &[u8]) -> String {
     output
 }
 
-fn random_bytes(len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(len);
-    while out.len() < len {
-        let bytes = Uuid::new_v4().into_bytes();
-        let remaining = len - out.len();
-        out.extend_from_slice(&bytes[..remaining.min(bytes.len())]);
+fn map_crypto_entropy_error(api: &'static str, err: getrandom::Error) -> rquickjs::Error {
+    tracing::error!(
+        event = "pijs.crypto.entropy_failure",
+        api,
+        error = %err,
+        "OS randomness unavailable"
+    );
+    rquickjs::Error::new_into_js_message("crypto", api, format!("OS randomness unavailable: {err}"))
+}
+
+fn fill_random_bytes_with<F, E>(len: usize, mut fill: F) -> std::result::Result<Vec<u8>, E>
+where
+    F: FnMut(&mut [u8]) -> std::result::Result<(), E>,
+{
+    let mut out = vec![0u8; len];
+    if len > 0 {
+        fill(&mut out)?;
     }
-    out
+    Ok(out)
+}
+
+fn random_bytes(len: usize) -> std::result::Result<Vec<u8>, getrandom::Error> {
+    fill_random_bytes_with(len, getrandom::fill)
 }
 
 /// JavaScript bridge code for managing pending hostcalls and timer callbacks.
@@ -20899,6 +20914,46 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
             assert_eq!(
                 get_global_json(&runtime, "done").await,
                 serde_json::json!(true)
+            );
+        });
+    }
+
+    #[test]
+    fn pijs_random_bytes_helper_propagates_fill_errors() {
+        let err = fill_random_bytes_with(16, |_| Err("entropy unavailable")).unwrap_err();
+        assert_eq!(err, "entropy unavailable");
+    }
+
+    #[test]
+    fn pijs_crypto_random_bytes_are_not_uuid_patterned() {
+        futures::executor::block_on(async {
+            let clock = Arc::new(DeterministicClock::new(0));
+            let runtime = PiJsRuntime::with_clock(Arc::clone(&clock))
+                .await
+                .expect("create runtime");
+
+            runtime
+                .eval(
+                    r#"
+                    const bytes = pi.crypto.randomBytes(128);
+                    const blocks = [];
+                    for (let i = 0; i < bytes.length; i += 16) {
+                        blocks.push({
+                            versionNibble: (bytes[i + 6] >> 4) & 0x0f,
+                            variantBits: (bytes[i + 8] >> 6) & 0x03,
+                        });
+                    }
+                    globalThis.randomBytesLookLikeUuidBlocks = blocks.every(
+                        (block) => block.versionNibble === 4 && block.variantBits === 2,
+                    );
+                    "#,
+                )
+                .await
+                .expect("eval random bytes pattern");
+
+            assert_eq!(
+                get_global_json(&runtime, "randomBytesLookLikeUuidBlocks").await,
+                serde_json::json!(false)
             );
         });
     }

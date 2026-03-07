@@ -6,7 +6,7 @@
 
 use rquickjs::prelude::Func;
 use sha2::{Digest, Sha256};
-use uuid::Uuid;
+use uuid::Builder;
 
 /// Register all crypto hostcalls on the QuickJS global object.
 ///
@@ -123,7 +123,9 @@ fn register_uuid_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Result<()>
     // __pi_crypto_random_uuid_native() -> v4 UUID string
     global.set(
         "__pi_crypto_random_uuid_native",
-        Func::from(|| -> String { Uuid::new_v4().to_string() }),
+        Func::from(|| -> rquickjs::Result<String> {
+            random_uuid().map_err(|err| map_entropy_error("randomUUID", err))
+        }),
     )
 }
 
@@ -139,7 +141,7 @@ fn register_random_int_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Resu
                 ));
             }
             let range = max - min;
-            let rand_bytes = random_bytes(8);
+            let rand_bytes = random_bytes(8).map_err(|err| map_entropy_error("randomInt", err))?;
             let mut random_window = [0_u8; 8];
             random_window.copy_from_slice(&rand_bytes);
             // 53 bits of randomness (max safe integer precision in JS)
@@ -155,7 +157,10 @@ fn register_random_bytes_hostcall(global: &rquickjs::Object<'_>) -> rquickjs::Re
     // __pi_crypto_random_bytes_native(size) -> hex string of random bytes
     global.set(
         "__pi_crypto_random_bytes_native",
-        Func::from(|size: usize| -> String { hex_lower(&random_bytes(size)) }),
+        Func::from(|size: usize| -> rquickjs::Result<String> {
+            let bytes = random_bytes(size).map_err(|err| map_entropy_error("randomBytes", err))?;
+            Ok(hex_lower(&bytes))
+        }),
     )
 }
 
@@ -219,17 +224,44 @@ fn hex_decode(hex: &str) -> Vec<u8> {
     bytes
 }
 
-/// Generate random bytes using UUID v4 as entropy source.
-fn random_bytes(len: usize) -> Vec<u8> {
+fn map_entropy_error(api: &'static str, err: getrandom::Error) -> rquickjs::Error {
+    tracing::error!(
+        event = "pijs.crypto.entropy_failure",
+        api,
+        error = %err,
+        "OS randomness unavailable"
+    );
+    rquickjs::Error::new_into_js_message("crypto", api, format!("OS randomness unavailable: {err}"))
+}
+
+fn fill_random_bytes_with<F, E>(len: usize, mut fill: F) -> Result<Vec<u8>, E>
+where
+    F: FnMut(&mut [u8]) -> Result<(), E>,
+{
     let mut out = vec![0u8; len];
     if len > 0 {
-        if let Err(e) = getrandom::fill(&mut out) {
-            // Log the error but don't panic the entire CLI. In extreme edge cases
-            // (e.g. OS entropy pool not initialized), this will fallback to zeros.
-            tracing::error!("getrandom::fill failed: {}", e);
-        }
+        fill(&mut out)?;
     }
-    out
+    Ok(out)
+}
+
+/// Generate random bytes from the operating system RNG.
+fn random_bytes(len: usize) -> Result<Vec<u8>, getrandom::Error> {
+    fill_random_bytes_with(len, getrandom::fill)
+}
+
+fn random_uuid_with<F, E>(mut fill: F) -> Result<String, E>
+where
+    F: FnMut(&mut [u8]) -> Result<(), E>,
+{
+    let mut bytes = [0_u8; 16];
+    fill(&mut bytes)?;
+    Ok(Builder::from_random_bytes(bytes).into_uuid().to_string())
+}
+
+/// Generate a random UUID v4 from OS RNG bytes so entropy failures surface as errors.
+fn random_uuid() -> Result<String, getrandom::Error> {
+    random_uuid_with(getrandom::fill)
 }
 
 /// The JS source for the `node:crypto` virtual module.
@@ -505,7 +537,7 @@ mod tests {
     #[test]
     fn random_bytes_correct_length() {
         for len in [0, 1, 4, 16, 32, 64, 100] {
-            let bytes = random_bytes(len);
+            let bytes = random_bytes(len).expect("random bytes");
             assert_eq!(
                 bytes.len(),
                 len,
@@ -516,10 +548,16 @@ mod tests {
 
     #[test]
     fn random_bytes_two_calls_differ() {
-        let a = random_bytes(32);
-        let b = random_bytes(32);
+        let a = random_bytes(32).expect("first random bytes");
+        let b = random_bytes(32).expect("second random bytes");
         // Probability of collision is astronomically low.
         assert_ne!(a, b, "two random_bytes(32) calls should differ");
+    }
+
+    #[test]
+    fn random_bytes_propagates_fill_errors() {
+        let err = fill_random_bytes_with(8, |_| Err("entropy unavailable")).unwrap_err();
+        assert_eq!(err, "entropy unavailable");
     }
 
     // ─── SHA-256 known-answer tests ──────────────────────────────────────
@@ -608,7 +646,7 @@ mod tests {
 
     #[test]
     fn uuid_v4_format() {
-        let id = Uuid::new_v4().to_string();
+        let id = random_uuid().expect("random uuid");
         let re = regex::Regex::new(
             r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
         )
@@ -618,9 +656,15 @@ mod tests {
 
     #[test]
     fn uuid_v4_uniqueness() {
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
+        let a = random_uuid().expect("first random uuid");
+        let b = random_uuid().expect("second random uuid");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn random_uuid_propagates_fill_errors() {
+        let err = random_uuid_with(|_| Err("entropy unavailable")).unwrap_err();
+        assert_eq!(err, "entropy unavailable");
     }
 
     // ─── Timing-safe comparison tests ────────────────────────────────────
@@ -663,7 +707,7 @@ mod tests {
     fn random_bytes_hostcall_roundtrip() {
         // Verify the hex encoding used by the hostcall decodes back correctly.
         for len in [0, 1, 8, 16, 32] {
-            let hex = hex_lower(&random_bytes(len));
+            let hex = hex_lower(&random_bytes(len).expect("random bytes"));
             assert_eq!(hex.len(), len * 2, "hex should be 2x the byte length");
             let decoded = hex_decode(&hex);
             assert_eq!(decoded.len(), len, "decoded length should match original");
@@ -761,7 +805,7 @@ mod tests {
 
             #[test]
             fn random_bytes_returns_correct_length(len in 0..256usize) {
-                let bytes = random_bytes(len);
+                let bytes = random_bytes(len).expect("random bytes");
                 assert_eq!(
                     bytes.len(), len,
                     "random_bytes({len}) should return {len} bytes"
