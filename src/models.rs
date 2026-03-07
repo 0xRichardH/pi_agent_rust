@@ -723,8 +723,17 @@ fn native_adapter_seed_defaults(provider: &str) -> Option<AdHocProviderDefaults>
             context_window: 128_000,
             max_tokens: 16_384,
         }),
-        "github-copilot" | "gitlab" | "sap-ai-core" => Some(AdHocProviderDefaults {
+        "github-copilot" | "sap-ai-core" => Some(AdHocProviderDefaults {
             api: "openai-completions",
+            base_url: "",
+            auth_header: true,
+            reasoning: true,
+            input: &INPUT_TEXT_ONLY,
+            context_window: 128_000,
+            max_tokens: 16_384,
+        }),
+        "gitlab" => Some(AdHocProviderDefaults {
+            api: "gitlab-chat",
             base_url: "",
             auth_header: true,
             reasoning: true,
@@ -1976,6 +1985,19 @@ mod tests {
     }
 
     #[test]
+    fn built_in_models_seed_gitlab_upstream_entries_with_gitlab_chat_api() {
+        let (_dir, auth) = test_auth_storage();
+        let models = built_in_models(&auth, ModelRegistryLoadMode::Full);
+
+        let gitlab = models
+            .iter()
+            .find(|m| m.model.provider == "gitlab" && m.model.id == "duo-chat-gpt-5-1")
+            .expect("gitlab upstream model");
+        assert_eq!(gitlab.model.api, "gitlab-chat");
+        assert!(gitlab.auth_header);
+    }
+
+    #[test]
     fn autocomplete_candidates_include_legacy_and_latest_entries() {
         let candidates = model_autocomplete_candidates();
         assert!(
@@ -2943,6 +2965,16 @@ mod tests {
         assert_eq!(defaults.api, "bedrock-converse-stream");
         assert_eq!(defaults.base_url, "");
         assert!(!defaults.auth_header);
+    }
+
+    #[test]
+    fn native_adapter_seed_defaults_gitlab_use_gitlab_chat_api() {
+        let defaults = native_adapter_seed_defaults("gitlab").expect("gitlab seed defaults");
+        assert_eq!(defaults.api, "gitlab-chat");
+        assert_eq!(defaults.base_url, "");
+        assert!(defaults.auth_header);
+        assert!(defaults.reasoning);
+        assert_eq!(defaults.input, &INPUT_TEXT_ONLY);
     }
 
     // ─── ad_hoc_model_entry ──────────────────────────────────────────
