@@ -35,7 +35,7 @@ impl Default for SseEvent {
 }
 
 /// Parser state for SSE stream.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SseParser {
     buffer: String,
     current: SseEvent,
@@ -44,12 +44,36 @@ pub struct SseParser {
     bom_checked: bool,
     /// Number of bytes in `buffer` that have already been scanned for newlines.
     scanned_len: usize,
+    /// Per-event data accumulation cap in bytes.
+    max_event_data_bytes: usize,
+}
+
+impl Default for SseParser {
+    fn default() -> Self {
+        Self {
+            buffer: String::new(),
+            current: SseEvent::default(),
+            has_data: false,
+            bom_checked: false,
+            scanned_len: 0,
+            max_event_data_bytes: MAX_EVENT_DATA_BYTES,
+        }
+    }
 }
 
 impl SseParser {
     /// Create a new SSE parser.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a parser with a custom per-event data cap (for testing).
+    #[cfg(test)]
+    fn with_max_event_data_bytes(limit: usize) -> Self {
+        Self {
+            max_event_data_bytes: limit,
+            ..Self::default()
+        }
     }
 
     /// Intern common SSE event type names to avoid per-event String allocation.
@@ -92,7 +116,12 @@ impl SseParser {
     }
 
     /// Process a single line of SSE data.
-    fn process_line(line: &str, current: &mut SseEvent, has_data: &mut bool) {
+    fn process_line(
+        line: &str,
+        current: &mut SseEvent,
+        has_data: &mut bool,
+        max_event_data_bytes: usize,
+    ) {
         if let Some(rest) = line.strip_prefix(':') {
             // Comment line - ignore (but could be used for keep-alive)
             let _ = rest;
@@ -101,7 +130,7 @@ impl SseParser {
             let value = value.strip_prefix(' ').unwrap_or(value);
             match field {
                 "event" => current.event = Self::intern_event_type(value),
-                "data" => Self::append_data_line(current, value, has_data, MAX_EVENT_DATA_BYTES),
+                "data" => Self::append_data_line(current, value, has_data, max_event_data_bytes),
                 "id" => {
                     if !value.contains('\0') {
                         current.id = Some(value.to_string());
@@ -114,7 +143,7 @@ impl SseParser {
             // Field with no value
             match line {
                 "event" => current.event = Cow::Borrowed(""),
-                "data" => Self::append_data_line(current, "", has_data, MAX_EVENT_DATA_BYTES),
+                "data" => Self::append_data_line(current, "", has_data, max_event_data_bytes),
                 "id" => current.id = Some(String::new()),
                 _ => {}
             }
@@ -145,6 +174,7 @@ impl SseParser {
         bom_checked: &mut bool,
         current: &mut SseEvent,
         has_data: &mut bool,
+        max_event_data_bytes: usize,
         emit: &mut F,
     ) -> usize
     where
@@ -217,7 +247,7 @@ impl SseParser {
                     Self::reset_current_for_next_event(current);
                 }
             } else {
-                Self::process_line(line, current, has_data);
+                Self::process_line(line, current, has_data, max_event_data_bytes);
             }
         }
 
@@ -252,6 +282,7 @@ impl SseParser {
                 &mut self.bom_checked,
                 &mut self.current,
                 &mut self.has_data,
+                self.max_event_data_bytes,
                 &mut emit,
             );
             if consumed < data.len() {
@@ -268,6 +299,7 @@ impl SseParser {
                 &mut self.bom_checked,
                 &mut self.current,
                 &mut self.has_data,
+                self.max_event_data_bytes,
                 &mut emit,
             );
             if consumed > 0 {
@@ -298,7 +330,7 @@ impl SseParser {
         if !self.buffer.is_empty() {
             let line = std::mem::take(&mut self.buffer);
             let line = line.trim_end_matches('\r');
-            Self::process_line(line, &mut self.current, &mut self.has_data);
+            Self::process_line(line, &mut self.current, &mut self.has_data, self.max_event_data_bytes);
         }
 
         if self.has_data {
@@ -951,6 +983,72 @@ mod tests {
 
         SseParser::append_data_line(&mut current, "c", &mut has_data, 3);
         assert_eq!(current.data, "ab\n");
+    }
+
+    #[test]
+    fn test_data_cap_single_oversized_line_via_feed() {
+        // A single data line whose value exceeds the cap must be dropped entirely.
+        let mut parser = SseParser::with_max_event_data_bytes(10);
+        let events = parser.feed("data: this-is-longer-than-ten-bytes\n\n");
+        assert_eq!(events.len(), 0, "oversized-only event should not emit (no data flag set)");
+    }
+
+    #[test]
+    fn test_data_cap_accumulation_via_feed() {
+        // Multiple small data lines that collectively exceed the cap:
+        // accepted lines are kept, the line that would push past the cap is rejected.
+        let mut parser = SseParser::with_max_event_data_bytes(10);
+        // "abc\n" = 4 bytes after first append
+        let events = parser.feed("data: abc\ndata: def\ndata: ghi\n\n");
+        assert_eq!(events.len(), 1);
+        // "abc\n" (4) + "def\n" (4) = 8 bytes; "ghi\n" (4) would make 12 > 10, rejected.
+        // Trailing newline stripped on emit → "abc\ndef"
+        assert_eq!(events[0].data, "abc\ndef");
+    }
+
+    #[test]
+    fn test_data_cap_exact_boundary_via_feed() {
+        // Data that exactly reaches the cap should be accepted.
+        let mut parser = SseParser::with_max_event_data_bytes(4);
+        // "abc\n" = 4 bytes, exactly at cap
+        let events = parser.feed("data: abc\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "abc");
+    }
+
+    #[test]
+    fn test_data_cap_next_event_resets() {
+        // After a capped event, the next event should start fresh.
+        let mut parser = SseParser::with_max_event_data_bytes(6);
+        let events = parser.feed("data: abcde\ndata: rejected\n\ndata: ok\n\n");
+        assert_eq!(events.len(), 2);
+        // First event: "abcde\n" = 6 bytes at cap; "rejected\n" would exceed → dropped.
+        assert_eq!(events[0].data, "abcde");
+        // Second event starts fresh with a clean data buffer.
+        assert_eq!(events[1].data, "ok");
+    }
+
+    #[test]
+    fn test_data_cap_chunked_delivery() {
+        // Cap enforcement must work even when data arrives in small chunks.
+        let mut parser = SseParser::with_max_event_data_bytes(10);
+        parser.feed("data: abc\n");
+        parser.feed("data: def\n");
+        // "abc\n" (4) + "def\n" (4) = 8; "toolong\n" (8) would make 16 > 10
+        let events = parser.feed("data: toolong\n\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].data, "abc\ndef");
+    }
+
+    #[test]
+    fn test_data_cap_flush_path() {
+        // Cap must also be enforced when the stream ends without a trailing blank line.
+        let mut parser = SseParser::with_max_event_data_bytes(6);
+        parser.feed("data: abcde\n");
+        parser.feed("data: no\n");
+        // "abcde\n" = 6 bytes at cap; "no\n" (3) would make 9 > 6 → rejected.
+        let event = parser.flush().expect("should flush pending event");
+        assert_eq!(event.data, "abcde");
     }
 
     #[test]
