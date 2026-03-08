@@ -2709,6 +2709,25 @@ fn format_settings_summary(config: &Config) -> String {
     format!("provider={provider}  model={model}  thinking={thinking}")
 }
 
+fn interactive_config_settings_summary_with_roots(
+    cwd: &Path,
+    global_dir: &Path,
+    config_override_path: Option<&Path>,
+) -> Result<String> {
+    let config = Config::load_with_roots(config_override_path, global_dir, cwd)?;
+    Ok(format_settings_summary(&config))
+}
+
+fn interactive_config_settings_summary(cwd: &Path) -> Result<String> {
+    let global_dir = Config::global_dir();
+    let config_override_path = Config::config_path_override_from_env(cwd);
+    interactive_config_settings_summary_with_roots(
+        cwd,
+        &global_dir,
+        config_override_path.as_deref(),
+    )
+}
+
 fn run_config_tui(
     packages: Vec<ConfigPackageState>,
     settings_summary: String,
@@ -2910,8 +2929,7 @@ async fn handle_config(
     let has_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
 
     if interactive_requested && has_tty {
-        let config = Config::load().unwrap_or_default();
-        let settings_summary = format_settings_summary(&config);
+        let settings_summary = interactive_config_settings_summary(cwd)?;
         if let Some(updated) = run_config_tui(packages, settings_summary)? {
             persist_package_toggles(cwd, &updated)?;
             println!("Saved package resource toggles.");
@@ -4942,6 +4960,24 @@ mod tests {
         assert_eq!(
             format_settings_summary(&config),
             "provider=openai  model=gpt-4.1  thinking=high"
+        );
+    }
+
+    #[test]
+    fn interactive_config_settings_summary_with_roots_errors_on_invalid_settings() {
+        let temp = TempDir::new().expect("tempdir");
+        let cwd = temp.path().join("repo");
+        let global_dir = temp.path().join("global");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::create_dir_all(&global_dir).expect("create global dir");
+        std::fs::write(global_dir.join("settings.json"), "{not-json").expect("write settings");
+
+        let err = interactive_config_settings_summary_with_roots(&cwd, &global_dir, None)
+            .expect_err("invalid settings should be reported");
+
+        assert!(
+            err.to_string().contains("Failed to parse settings file"),
+            "unexpected error: {err}"
         );
     }
 
