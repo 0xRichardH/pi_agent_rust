@@ -1177,7 +1177,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.insert(TEST_VAR.to_string(), Some("override-value".to_string()));
-            panic!("poison override mutex");
+            std::panic::resume_unwind(Box::new("poison override mutex".to_string()));
         }));
 
         assert_eq!(
@@ -1196,7 +1196,7 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.insert(TEST_VAR.to_string(), None);
-            panic!("poison override mutex");
+            std::panic::resume_unwind(Box::new("poison override mutex".to_string()));
         }));
 
         assert_eq!(
