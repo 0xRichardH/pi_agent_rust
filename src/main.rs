@@ -3158,7 +3158,7 @@ fn list_models_from_cached_rows(rows: &[CachedModelRow], pattern: Option<&str>) 
         return;
     }
 
-    let filtered: Vec<&CachedModelRow> = if let Some(pattern) = pattern {
+    if let Some(pattern) = pattern {
         let filtered = rows
             .iter()
             .filter(|row| fuzzy_match_model_id(pattern, &row.provider, &row.model))
@@ -3167,25 +3167,10 @@ fn list_models_from_cached_rows(rows: &[CachedModelRow], pattern: Option<&str>) 
             println!("No models matching \"{pattern}\"");
             return;
         }
-        filtered
+        print_model_table(&filtered);
     } else {
-        rows.iter().collect()
-    };
-
-    let table_rows = filtered
-        .iter()
-        .map(|row| {
-            (
-                row.provider.clone(),
-                row.model.clone(),
-                row.context.clone(),
-                row.max_out.clone(),
-                row.thinking.clone(),
-                row.images.clone(),
-            )
-        })
-        .collect::<Vec<_>>();
-    print_model_table(&table_rows);
+        print_model_table(rows);
+    }
 }
 
 fn should_fingerprint_model_env_var(key: &str) -> bool {
@@ -3861,64 +3846,140 @@ fn build_model_rows(
         .collect()
 }
 
-fn print_model_table(rows: &[(String, String, String, String, String, String)]) {
+trait ModelTableRow {
+    fn provider(&self) -> &str;
+    fn model(&self) -> &str;
+    fn context(&self) -> &str;
+    fn max_out(&self) -> &str;
+    fn thinking(&self) -> &str;
+    fn images(&self) -> &str;
+}
+
+impl ModelTableRow for CachedModelRow {
+    fn provider(&self) -> &str {
+        &self.provider
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn context(&self) -> &str {
+        &self.context
+    }
+
+    fn max_out(&self) -> &str {
+        &self.max_out
+    }
+
+    fn thinking(&self) -> &str {
+        &self.thinking
+    }
+
+    fn images(&self) -> &str {
+        &self.images
+    }
+}
+
+impl ModelTableRow for (String, String, String, String, String, String) {
+    fn provider(&self) -> &str {
+        &self.0
+    }
+
+    fn model(&self) -> &str {
+        &self.1
+    }
+
+    fn context(&self) -> &str {
+        &self.2
+    }
+
+    fn max_out(&self) -> &str {
+        &self.3
+    }
+
+    fn thinking(&self) -> &str {
+        &self.4
+    }
+
+    fn images(&self) -> &str {
+        &self.5
+    }
+}
+
+impl<T: ModelTableRow + ?Sized> ModelTableRow for &T {
+    fn provider(&self) -> &str {
+        (*self).provider()
+    }
+
+    fn model(&self) -> &str {
+        (*self).model()
+    }
+
+    fn context(&self) -> &str {
+        (*self).context()
+    }
+
+    fn max_out(&self) -> &str {
+        (*self).max_out()
+    }
+
+    fn thinking(&self) -> &str {
+        (*self).thinking()
+    }
+
+    fn images(&self) -> &str {
+        (*self).images()
+    }
+}
+
+fn write_model_table<R: ModelTableRow, W: Write>(out: &mut W, rows: &[R]) -> io::Result<()> {
     let headers = (
         "provider", "model", "context", "max-out", "thinking", "images",
     );
 
-    let provider_w = rows
-        .iter()
-        .map(|r| r.0.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.0.len());
-    let model_w = rows
-        .iter()
-        .map(|r| r.1.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.1.len());
-    let context_w = rows
-        .iter()
-        .map(|r| r.2.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.2.len());
-    let max_out_w = rows
-        .iter()
-        .map(|r| r.3.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.3.len());
-    let thinking_w = rows
-        .iter()
-        .map(|r| r.4.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.4.len());
-    let images_w = rows
-        .iter()
-        .map(|r| r.5.len())
-        .max()
-        .unwrap_or(0)
-        .max(headers.5.len());
+    let mut provider_w = headers.0.len();
+    let mut model_w = headers.1.len();
+    let mut context_w = headers.2.len();
+    let mut max_out_w = headers.3.len();
+    let mut thinking_w = headers.4.len();
+    let mut images_w = headers.5.len();
+    for row in rows {
+        provider_w = provider_w.max(row.provider().len());
+        model_w = model_w.max(row.model().len());
+        context_w = context_w.max(row.context().len());
+        max_out_w = max_out_w.max(row.max_out().len());
+        thinking_w = thinking_w.max(row.thinking().len());
+        images_w = images_w.max(row.images().len());
+    }
 
+    let (provider, model, context, max_out, thinking, images) = headers;
+    writeln!(
+        out,
+        "{provider:<provider_w$}  {model:<model_w$}  {context:<context_w$}  {max_out:<max_out_w$}  {thinking:<thinking_w$}  {images:<images_w$}"
+    )?;
+
+    for row in rows {
+        writeln!(
+            out,
+            "{provider:<provider_w$}  {model:<model_w$}  {context:<context_w$}  {max_out:<max_out_w$}  {thinking:<thinking_w$}  {images:<images_w$}",
+            provider = row.provider(),
+            model = row.model(),
+            context = row.context(),
+            max_out = row.max_out(),
+            thinking = row.thinking(),
+            images = row.images(),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn print_model_table<R: ModelTableRow>(rows: &[R]) {
     // Buffer all output to reduce write syscalls from O(rows) to O(1).
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
-
-    let (provider, model, context, max_out, thinking, images) = headers;
-    let _ = writeln!(
-        out,
-        "{provider:<provider_w$}  {model:<model_w$}  {context:<context_w$}  {max_out:<max_out_w$}  {thinking:<thinking_w$}  {images:<images_w$}"
-    );
-
-    for (provider, model, context, max_out, thinking, images) in rows {
-        let _ = writeln!(
-            out,
-            "{provider:<provider_w$}  {model:<model_w$}  {context:<context_w$}  {max_out:<max_out_w$}  {thinking:<thinking_w$}  {images:<images_w$}"
-        );
-    }
+    let _ = write_model_table(&mut out, rows);
 }
 
 fn prompt_line(prompt: &str) -> Result<Option<String>> {
@@ -4627,6 +4688,12 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    fn render_model_table_for_test<R: ModelTableRow>(rows: &[R]) -> String {
+        let mut buf = Vec::new();
+        write_model_table(&mut buf, rows).expect("render model table");
+        String::from_utf8(buf).expect("table output should be utf-8")
+    }
+
     #[test]
     fn exit_code_classifier_marks_usage_errors() {
         let usage_err = anyhow!("Unknown --only categories: nope");
@@ -5264,5 +5331,78 @@ mod tests {
 
         state.observe_delta(" world\n");
         assert!(!state.needs_trailing_newline());
+    }
+
+    #[test]
+    fn model_table_renderer_matches_cached_and_owned_rows() {
+        let cached = vec![
+            CachedModelRow {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4-5".to_string(),
+                context: "200k".to_string(),
+                max_out: "8k".to_string(),
+                thinking: "yes".to_string(),
+                images: "yes".to_string(),
+            },
+            CachedModelRow {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                context: "128k".to_string(),
+                max_out: "16k".to_string(),
+                thinking: "no".to_string(),
+                images: "yes".to_string(),
+            },
+        ];
+        let owned = vec![
+            (
+                "anthropic".to_string(),
+                "claude-sonnet-4-5".to_string(),
+                "200k".to_string(),
+                "8k".to_string(),
+                "yes".to_string(),
+                "yes".to_string(),
+            ),
+            (
+                "openai".to_string(),
+                "gpt-5".to_string(),
+                "128k".to_string(),
+                "16k".to_string(),
+                "no".to_string(),
+                "yes".to_string(),
+            ),
+        ];
+
+        assert_eq!(
+            render_model_table_for_test(&cached),
+            render_model_table_for_test(&owned)
+        );
+    }
+
+    #[test]
+    fn model_table_renderer_supports_borrowed_cached_rows() {
+        let cached = vec![
+            CachedModelRow {
+                provider: "openai".to_string(),
+                model: "gpt-5".to_string(),
+                context: "128k".to_string(),
+                max_out: "16k".to_string(),
+                thinking: "no".to_string(),
+                images: "yes".to_string(),
+            },
+            CachedModelRow {
+                provider: "openrouter".to_string(),
+                model: "anthropic/claude-3.7-sonnet".to_string(),
+                context: "200k".to_string(),
+                max_out: "8k".to_string(),
+                thinking: "yes".to_string(),
+                images: "no".to_string(),
+            },
+        ];
+        let borrowed = cached.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            render_model_table_for_test(&cached),
+            render_model_table_for_test(&borrowed)
+        );
     }
 }
