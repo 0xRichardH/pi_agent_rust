@@ -192,6 +192,23 @@ impl SseParser {
         }
     }
 
+    #[inline]
+    fn reset_after_buffer_limit<F>(&mut self, emit: &mut F)
+    where
+        F: FnMut(SseEvent),
+    {
+        self.buffer = String::new();
+        self.current = SseEvent::default();
+        self.has_data = false;
+        self.bom_checked = false;
+        self.scanned_len = 0;
+        emit(SseEvent {
+            event: Cow::Borrowed("error"),
+            data: "SSE buffer limit exceeded".to_string(),
+            ..Default::default()
+        });
+    }
+
     /// Process complete lines from `source`, dispatching events via `emit`.
     /// Returns the byte offset of the first unconsumed byte.
     #[inline]
@@ -287,20 +304,6 @@ impl SseParser {
         F: FnMut(SseEvent),
     {
         const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024;
-        if self.buffer.len() + data.len() > MAX_BUFFER_SIZE {
-            self.buffer.clear();
-            self.current = SseEvent::default();
-            self.has_data = false;
-            self.bom_checked = false;
-            self.scanned_len = 0;
-            emit(SseEvent {
-                event: Cow::Borrowed("error"),
-                data: "SSE buffer limit exceeded".to_string(),
-                ..Default::default()
-            });
-            return;
-        }
-
         if self.buffer.is_empty() {
             // Fast path: process data directly without copying to buffer.
             let consumed = Self::process_source(
@@ -314,14 +317,20 @@ impl SseParser {
             );
             if consumed < data.len() {
                 self.buffer.push_str(&data[consumed..]);
+                if self.buffer.len() > MAX_BUFFER_SIZE {
+                    self.reset_after_buffer_limit(&mut emit);
+                    return;
+                }
             }
         } else {
-            // Slow path: combine with existing buffered data, then process.
-            self.buffer.push_str(data);
+            // Slow path: parse against a temporary combined source so we only
+            // retain the truly unconsumed tail instead of a giant drained buffer.
+            let mut combined = std::mem::take(&mut self.buffer);
+            combined.push_str(data);
             // Re-scan from the last safe point (minus 1 to handle split CRLF).
             let scan_start = self.scanned_len.saturating_sub(1);
             let consumed = Self::process_source(
-                &self.buffer,
+                &combined,
                 scan_start,
                 &mut self.bom_checked,
                 &mut self.current,
@@ -329,8 +338,12 @@ impl SseParser {
                 self.max_event_data_bytes,
                 &mut emit,
             );
-            if consumed > 0 {
-                self.buffer.drain(..consumed);
+            if consumed < combined.len() {
+                self.buffer.push_str(&combined[consumed..]);
+            }
+            if self.buffer.len() > MAX_BUFFER_SIZE {
+                self.reset_after_buffer_limit(&mut emit);
+                return;
             }
         }
         // Whether we drained or not, the entire remaining buffer has been scanned.
@@ -1184,11 +1197,44 @@ mod tests {
         assert_eq!(overflow_events[0].data, "SSE buffer limit exceeded");
 
         assert!(!parser.has_pending());
+        assert!(parser.buffer.capacity() < 1024);
         assert!(parser.flush().is_none());
 
         let fresh = parser.feed("data: fresh\n\n");
         assert_eq!(fresh.len(), 1);
         assert_eq!(fresh[0].data, "fresh");
+    }
+
+    #[test]
+    fn test_large_complete_chunk_does_not_trip_buffer_limit_fast_path() {
+        let mut parser = SseParser::new();
+        let payload = "x".repeat(10 * 1024 * 1024 + 1);
+        let events = parser.feed(&format!("data: {payload}\n\n"));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "message");
+        assert_eq!(events[0].data.len(), payload.len());
+        assert_eq!(events[0].data, payload);
+        assert!(!parser.has_pending());
+        assert!(parser.buffer.capacity() < 1024);
+        assert!(parser.flush().is_none());
+    }
+
+    #[test]
+    fn test_large_complete_chunk_does_not_trip_buffer_limit_with_buffered_prefix() {
+        let mut parser = SseParser::new();
+        assert!(parser.feed("data: ").is_empty());
+
+        let payload = "x".repeat(10 * 1024 * 1024 + 1);
+        let events = parser.feed(&format!("{payload}\n\n"));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event, "message");
+        assert_eq!(events[0].data.len(), payload.len());
+        assert_eq!(events[0].data, payload);
+        assert!(!parser.has_pending());
+        assert!(parser.buffer.capacity() < 1024);
+        assert!(parser.flush().is_none());
     }
 
     #[test]
