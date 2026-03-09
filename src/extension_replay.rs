@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn overhead_per_mille_zero_baseline_returns_max() {
         assert_eq!(super::compute_overhead_per_mille(0, 1), u32::MAX);
-        assert_eq!(super::compute_overhead_per_mille(0, 0), 0);
+        assert_eq!(super::compute_overhead_per_mille(0, 0), u32::MAX);
     }
 
     // ── ReplayRecorder tests ──
@@ -2305,12 +2305,12 @@ mod tests {
 
             #[test]
             fn compute_overhead_per_mille_zero_baseline_returns_max(
-                captured in 1..10_000u64,
+                captured in 0..10_000u64,
             ) {
                 let result = super::super::compute_overhead_per_mille(0, captured);
                 assert_eq!(
                     result, u32::MAX,
-                    "zero baseline with positive captured should be MAX"
+                    "zero baseline should always be treated as invalid telemetry"
                 );
             }
 
