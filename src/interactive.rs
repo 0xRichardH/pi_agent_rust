@@ -193,9 +193,12 @@ impl TmuxWheelGuard {
             return None;
         }
 
-        // Save existing WheelUp/WheelDown bindings so we can restore them.
-        let saved_wheel_up = Self::get_binding("WheelUp");
-        let saved_wheel_down = Self::get_binding("WheelDown");
+        // Save existing WheelUpPane/WheelDownPane bindings so we can restore them.
+        // N.B. We search for the exact key names we override (WheelUpPane /
+        // WheelDownPane), not the shorter "WheelUp" / "WheelDown" which would
+        // also match unrelated keys like WheelUpStatus / WheelDownStatus.
+        let saved_wheel_up = Self::get_binding("WheelUpPane");
+        let saved_wheel_down = Self::get_binding("WheelDownPane");
 
         // Override WheelUp and WheelDown for this pane to send-keys
         // (i.e. forward the escape sequences to the application).
@@ -224,10 +227,10 @@ impl TmuxWheelGuard {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Each line looks like: bind-key    -T root    WheelUpPane    if-shell -F ...
-        // We search for lines containing the key name.
-        let search = format!(" {key}");
+        // Match on exact whitespace-delimited token to avoid false positives
+        // (e.g. "WheelUpPane" must not match "WheelUpPaneFoo" or "WheelUpStatus").
         for line in stdout.lines() {
-            if line.contains(&search) {
+            if line.split_whitespace().any(|tok| tok == key) {
                 return Some(line.trim().to_string());
             }
         }
@@ -1494,7 +1497,7 @@ pub async fn run_interactive(
 
     Program::new(app)
         .with_alt_screen()
-        .with_mouse_all_motion()
+        .with_mouse_cell_motion()
         .with_input_receiver(ui_rx)
         .run()?;
 
