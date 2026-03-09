@@ -46,6 +46,24 @@ fn test_env_overrides() -> &'static Mutex<HashMap<String, Option<String>>> {
 }
 
 #[cfg(test)]
+fn test_env_var_with<F>(
+    overrides: &Mutex<HashMap<String, Option<String>>>,
+    name: &str,
+    fallback: F,
+) -> Option<String>
+where
+    F: FnOnce() -> Option<String>,
+{
+    let guard = overrides
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(maybe_value) = guard.get(name) {
+        return maybe_value.clone();
+    }
+    fallback()
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TestEnvOverrideSnapshot {
     Absent,
@@ -53,16 +71,13 @@ enum TestEnvOverrideSnapshot {
     Value(String),
 }
 
+#[cfg(test)]
 fn env_var(name: &str) -> Option<String> {
-    #[cfg(test)]
-    {
-        if let Ok(guard) = test_env_overrides().lock() {
-            if let Some(maybe_value) = guard.get(name) {
-                // Some(val) = override to val; None = explicitly unset (tombstone)
-                return maybe_value.clone();
-            }
-        }
-    }
+    test_env_var_with(test_env_overrides(), name, || std::env::var(name).ok())
+}
+
+#[cfg(not(test))]
+fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
@@ -1150,6 +1165,44 @@ mod tests {
         drop(guard);
 
         restore_test_env_var(TEST_VAR, original);
+    }
+
+    #[test]
+    fn test_env_var_with_recovers_poisoned_override_value() {
+        const TEST_VAR: &str = "PI_AGENT_VCR_TEST_POISON_VALUE";
+        let overrides = Mutex::new(HashMap::new());
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = overrides
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.insert(TEST_VAR.to_string(), Some("override-value".to_string()));
+            panic!("poison override mutex");
+        }));
+
+        assert_eq!(
+            test_env_var_with(&overrides, TEST_VAR, || Some("host-value".to_string())).as_deref(),
+            Some("override-value")
+        );
+    }
+
+    #[test]
+    fn test_env_var_with_recovers_poisoned_tombstone() {
+        const TEST_VAR: &str = "PI_AGENT_VCR_TEST_POISON_TOMBSTONE";
+        let overrides = Mutex::new(HashMap::new());
+
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut guard = overrides
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.insert(TEST_VAR.to_string(), None);
+            panic!("poison override mutex");
+        }));
+
+        assert_eq!(
+            test_env_var_with(&overrides, TEST_VAR, || Some("host-value".to_string())),
+            None
+        );
     }
 
     fn run_async<T>(future: impl Future<Output = T> + Send + 'static) -> T

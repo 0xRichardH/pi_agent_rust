@@ -28,6 +28,27 @@ fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> St
     )
 }
 
+fn read_dir_sorted_paths(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    paths
+}
+
+fn resolved_path_kind(path: &Path) -> (bool, bool) {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => match fs::metadata(path) {
+            Ok(meta) => (meta.is_dir(), meta.is_file()),
+            Err(_) => (false, false),
+        },
+        Ok(meta) => (meta.is_dir(), meta.is_file()),
+        Err(_) => (false, false),
+    }
+}
+
 // ============================================================================
 // Diagnostics
 // ============================================================================
@@ -776,32 +797,19 @@ fn load_skills_from_dir(
             continue;
         }
 
-        let Ok(entries) = fs::read_dir(&current_dir) else {
-            continue;
-        };
+        let mut child_dirs = Vec::new();
 
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let file_name = file_name.to_string_lossy();
+        for full_path in read_dir_sorted_paths(&current_dir) {
+            let file_name = full_path.file_name().unwrap_or_default().to_string_lossy();
 
             if file_name.starts_with('.') || file_name == "node_modules" {
                 continue;
             }
 
-            let full_path = entry.path();
-            let file_type = entry.file_type();
-
-            let (is_dir, is_file) = match file_type {
-                Ok(ft) if ft.is_symlink() => match fs::metadata(&full_path) {
-                    Ok(meta) => (meta.is_dir(), meta.is_file()),
-                    Err(_) => continue,
-                },
-                Ok(ft) => (ft.is_dir(), ft.is_file()),
-                Err(_) => continue,
-            };
+            let (is_dir, is_file) = resolved_path_kind(&full_path);
 
             if is_dir {
-                stack.push((full_path, current_source.clone(), false));
+                child_dirs.push(full_path);
                 continue;
             }
 
@@ -820,6 +828,10 @@ fn load_skills_from_dir(
                 skills.push(skill);
             }
             diagnostics.extend(result.diagnostics);
+        }
+
+        for child_dir in child_dirs.into_iter().rev() {
+            stack.push((child_dir, current_source.clone(), false));
         }
     }
 
@@ -1087,18 +1099,9 @@ fn load_templates_from_dir(dir: &Path, source: &str, label: &str) -> Vec<PromptT
     if !dir.exists() {
         return templates;
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return templates;
-    };
 
-    for entry in entries.flatten() {
-        let full_path = entry.path();
-        let file_type = entry.file_type();
-        let is_file = match file_type {
-            Ok(ft) if ft.is_symlink() => fs::metadata(&full_path).is_ok_and(|m| m.is_file()),
-            Ok(ft) => ft.is_file(),
-            Err(_) => false,
-        };
+    for full_path in read_dir_sorted_paths(dir) {
+        let (_, is_file) = resolved_path_kind(&full_path);
 
         if is_file && full_path.extension().is_some_and(|ext| ext == "md") {
             if let Some(template) = load_template_from_file(&full_path, source, label) {
@@ -1230,18 +1233,9 @@ fn load_themes_from_dir(
     if !dir.exists() {
         return themes;
     }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return themes;
-    };
 
-    for entry in entries.flatten() {
-        let full_path = entry.path();
-        let file_type = entry.file_type();
-        let is_file = match file_type {
-            Ok(ft) if ft.is_symlink() => fs::metadata(&full_path).is_ok_and(|m| m.is_file()),
-            Ok(ft) => ft.is_file(),
-            Err(_) => false,
-        };
+    for full_path in read_dir_sorted_paths(dir) {
+        let (_, is_file) = resolved_path_kind(&full_path);
 
         if is_file && is_theme_file(&full_path) {
             if let Some(theme) = load_theme_from_file(&full_path, source, label, diagnostics) {
@@ -2409,6 +2403,24 @@ still frontmatter",
     }
 
     #[test]
+    fn test_read_dir_sorted_paths_returns_lexicographic_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        fs::write(temp.path().join("z.md"), "z").expect("write z");
+        fs::write(temp.path().join("a.md"), "a").expect("write a");
+
+        let names: Vec<String> = read_dir_sorted_paths(temp.path())
+            .into_iter()
+            .map(|path| {
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, vec!["a.md", "z.md"]);
+    }
+
+    #[test]
     fn test_precedence_sorted_enabled_paths_orders_by_documented_resource_priority() {
         let resources = vec![
             ResolvedResource {
@@ -2958,6 +2970,76 @@ still frontmatter",
         let result = load_skills_from_dir(skills_root, "test".to_string(), true);
         assert_eq!(result.skills.len(), 1);
         assert_eq!(result.skills[0].name, "my-skill");
+    }
+
+    #[test]
+    fn test_load_skills_prefers_lexicographically_first_duplicate_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("skills");
+        let z_skill = root.join("z").join("dup-skill");
+        let a_skill = root.join("a").join("dup-skill");
+        fs::create_dir_all(&z_skill).expect("create z skill dir");
+        fs::create_dir_all(&a_skill).expect("create a skill dir");
+        fs::write(
+            z_skill.join("SKILL.md"),
+            "---\nname: dup-skill\ndescription: z duplicate\n---\nZ body",
+        )
+        .expect("write z skill");
+        fs::write(
+            a_skill.join("SKILL.md"),
+            "---\nname: dup-skill\ndescription: a duplicate\n---\nA body",
+        )
+        .expect("write a skill");
+
+        let result = load_skills(LoadSkillsOptions {
+            cwd: temp.path().to_path_buf(),
+            agent_dir: temp.path().join("agent"),
+            skill_paths: vec![root],
+            include_defaults: false,
+        });
+
+        assert_eq!(result.skills.len(), 1);
+        assert_eq!(result.skills[0].file_path, a_skill.join("SKILL.md"));
+        assert_eq!(result.diagnostics.len(), 1);
+        assert_eq!(
+            result.diagnostics[0]
+                .collision
+                .as_ref()
+                .expect("collision")
+                .winner_path,
+            a_skill.join("SKILL.md")
+        );
+    }
+
+    #[test]
+    fn test_load_themes_prefers_lexicographically_first_duplicate_stem() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let themes_dir = temp.path().join("themes");
+        let dark_theme = themes_dir.join("dark.theme");
+        let dark_ini = themes_dir.join("dark.ini");
+        fs::create_dir_all(&themes_dir).expect("create themes dir");
+        fs::write(&dark_theme, "#445566").expect("write theme");
+        fs::write(&dark_ini, "#112233").expect("write ini");
+
+        let loaded = load_themes(LoadThemesOptions {
+            cwd: temp.path().to_path_buf(),
+            agent_dir: temp.path().join("agent"),
+            theme_paths: vec![themes_dir],
+            include_defaults: false,
+        });
+        let (themes, diagnostics) = dedupe_themes(loaded.themes);
+
+        assert_eq!(themes.len(), 1);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(themes[0].file_path, dark_ini.clone());
+        assert_eq!(
+            diagnostics[0]
+                .collision
+                .as_ref()
+                .expect("collision")
+                .winner_path,
+            dark_ini
+        );
     }
 
     // ── Property tests ──────────────────────────────────────────────────
