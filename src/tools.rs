@@ -1407,6 +1407,12 @@ impl Tool for ReadTool {
         let path = resolve_read_path(&input.path, &self.cwd);
 
         if let Ok(meta) = asupersync::fs::metadata(&path).await {
+            if !meta.is_file() {
+                return Err(Error::tool(
+                    "read",
+                    format!("Path {} is not a regular file", path.display()),
+                ));
+            }
             if meta.len() > READ_TOOL_MAX_BYTES {
                 return Err(Error::tool(
                     "read",
@@ -2793,6 +2799,12 @@ impl Tool for EditTool {
         }
 
         if let Ok(meta) = asupersync::fs::metadata(&absolute_path).await {
+            if !meta.is_file() {
+                return Err(Error::tool(
+                    "edit",
+                    format!("Path {} is not a regular file", absolute_path.display()),
+                ));
+            }
             if meta.len() > READ_TOOL_MAX_BYTES {
                 return Err(Error::tool(
                     "edit",
@@ -4342,6 +4354,10 @@ fn pump_stream<R: Read + Send + 'static>(mut reader: R, tx: &mpsc::SyncSender<Ve
     }
 }
 
+// Keep `rx` as `&mut Receiver`: `std::sync::mpsc::Receiver` is `Send` but not
+// `Sync`, and this helper awaits between polls, so `&Receiver` would make the
+// surrounding future non-Send.
+#[allow(clippy::needless_pass_by_ref_mut)]
 async fn drain_bash_output(
     rx: &mut mpsc::Receiver<Vec<u8>>,
     bash_output: &mut BashOutputState,
@@ -5181,6 +5197,12 @@ impl Tool for HashlineEditTool {
         let metadata = asupersync::fs::metadata(&absolute_path)
             .await
             .map_err(|e| Error::tool("hashline_edit", format!("Cannot read file metadata: {e}")))?;
+        if !metadata.is_file() {
+            return Err(Error::tool(
+                "hashline_edit",
+                format!("Path {} is not a regular file", absolute_path.display()),
+            ));
+        }
         if metadata.len() > READ_TOOL_MAX_BYTES {
             return Err(Error::tool(
                 "hashline_edit",

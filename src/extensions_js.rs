@@ -487,7 +487,16 @@ fn js_to_json_inner(value: &Value<'_>, depth: usize) -> rquickjs::Result<serde_j
     }
     if let Some(obj) = value.as_object() {
         let mut result = serde_json::Map::new();
+        let mut count = 0;
         for item in obj.props::<String, Value<'_>>() {
+            if count >= 100_000 {
+                return Err(rquickjs::Error::new_into_js_message(
+                    "json",
+                    "stringify",
+                    "Object properties count exceeds maximum allowed limit of 100,000",
+                ));
+            }
+            count += 1;
             let (k, v) = item?;
             result.insert(k, js_to_json_inner(&v, depth + 1)?);
         }

@@ -172,7 +172,10 @@ pub fn github_repo_candidate_from_url(input: &str) -> Option<GitHubRepoCandidate
 
     if let Some(rest) = raw.strip_prefix("git@") {
         // SCP-like: git@github.com:owner/repo(.git)
-        let (_host, path) = rest.split_once(':')?;
+        let (host, path) = rest.split_once(':')?;
+        if !host.eq_ignore_ascii_case("github.com") {
+            return None;
+        }
         return parse_owner_repo_from_path(path).map(GitHubRepoCandidate::Repo);
     }
 
@@ -518,6 +521,11 @@ mod tests {
     #[test]
     fn url_non_github_returns_none() {
         assert!(github_repo_candidate_from_url("https://gitlab.com/owner/repo").is_none());
+    }
+
+    #[test]
+    fn url_git_at_non_github_returns_none() {
+        assert!(github_repo_candidate_from_url("git@gitlab.com:owner/repo.git").is_none());
     }
 
     #[test]
