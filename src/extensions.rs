@@ -1000,6 +1000,12 @@ fn is_js_like(path: &Path) -> bool {
 
 fn relative_posix(root: &Path, path: &Path) -> String {
     let rel = path.strip_prefix(root).unwrap_or(path);
+    if rel.as_os_str().is_empty() {
+        return path.file_name().and_then(|name| name.to_str()).map_or_else(
+            || path.to_string_lossy().replace('\\', "/"),
+            ToString::to_string,
+        );
+    }
     let mut out = String::new();
     for component in rel.components() {
         if !out.is_empty() {
@@ -1839,6 +1845,27 @@ pi.exec("echo hello");
             "minified bundle should still infer exec capability from child_process require"
         );
     }
+
+    #[test]
+    fn compatibility_scanner_single_file_preserves_filename_in_evidence() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let entry = temp.path().join("single-file.js");
+        fs::write(&entry, "import fs from 'fs';\n").expect("write single-file extension");
+
+        let scanner = CompatibilityScanner::new(entry.clone());
+        let ledger = scanner.scan_path(&entry).expect("scan");
+
+        let rewrite = ledger
+            .rewrites
+            .iter()
+            .find(|rewrite| rewrite.from == "fs" && rewrite.to == "pi:node/fs")
+            .expect("fs rewrite");
+        assert_eq!(
+            rewrite.evidence[0].file, "single-file.js",
+            "single-file scans should keep the filename instead of an empty relative path"
+        );
+    }
+
     #[test]
     fn compatibility_scanner_detects_backtick_tool_calls() {
         let temp = tempfile::tempdir().expect("tempdir");
