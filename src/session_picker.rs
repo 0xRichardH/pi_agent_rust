@@ -3,7 +3,7 @@
 //! Provides an interactive list for choosing which session to resume.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -16,7 +16,6 @@ use serde::Deserialize;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::session::{Session, SessionHeader, encode_cwd};
-#[cfg(feature = "sqlite-sessions")]
 use crate::session_index::session_file_stats;
 use crate::session_index::{SessionIndex, SessionMeta};
 use crate::theme::{Theme, TuiStyles};
@@ -368,37 +367,33 @@ pub fn list_sessions_for_project(cwd: &Path, override_dir: Option<&Path>) -> Vec
         sessions = index.list_sessions(Some(&cwd_key)).unwrap_or_default();
     }
 
-    sessions.retain(|meta| Path::new(&meta.path).exists());
-
-    let scanned = scan_sessions_on_disk(&project_session_dir);
-    if !scanned.failed_paths.is_empty() {
-        for path in &scanned.failed_paths {
-            let _ = index.delete_session_path(path);
-        }
-    }
-
-    if !scanned.metas.is_empty() || !scanned.failed_paths.is_empty() {
-        let failed_paths = scanned
-            .failed_paths
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<HashSet<_>>();
-        let mut by_path: HashMap<String, SessionMeta> = sessions
-            .into_iter()
-            .filter(|meta| !failed_paths.contains(&meta.path))
-            .map(|meta| (meta.path.clone(), meta))
-            .collect();
-
-        for meta in scanned.metas {
-            // Disk scans are authoritative for successfully parsed session files.
-            // Drop indexed rows for files that failed reparsing so they stop
-            // surfacing in the picker until the on-disk session becomes valid again.
+    let mut missing_paths = Vec::new();
+    let mut by_path = HashMap::new();
+    for meta in sessions {
+        let path = PathBuf::from(&meta.path);
+        if path.exists() {
             by_path.insert(meta.path.clone(), meta);
+        } else {
+            missing_paths.push(path);
         }
-
-        sessions = by_path.into_values().collect();
     }
 
+    for path in &missing_paths {
+        let _ = index.delete_session_path(path);
+    }
+
+    let scanned = scan_sessions_on_disk(&project_session_dir, &by_path);
+    for path in &scanned.failed_paths {
+        let _ = index.delete_session_path(path);
+        by_path.remove(&path.display().to_string());
+    }
+
+    for meta in scanned.metas {
+        let _ = index.upsert_session_meta(meta.clone());
+        by_path.insert(meta.path.clone(), meta);
+    }
+
+    sessions = by_path.into_values().collect();
     sessions.sort_by_key(|m| Reverse(m.last_modified_ms));
     sessions.truncate(50);
     sessions
@@ -409,7 +404,43 @@ struct ScanSessionsResult {
     failed_paths: Vec<PathBuf>,
 }
 
-fn scan_sessions_on_disk(project_session_dir: &Path) -> ScanSessionsResult {
+#[cfg(test)]
+thread_local! {
+    static SESSION_SCAN_PARSE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_session_scan_parse_count() {
+    SESSION_SCAN_PARSE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn take_session_scan_parse_count() -> usize {
+    SESSION_SCAN_PARSE_COUNT.with(|count| {
+        let value = count.get();
+        count.set(0);
+        value
+    })
+}
+
+fn build_scanned_meta(path: &Path) -> crate::error::Result<SessionMeta> {
+    #[cfg(test)]
+    SESSION_SCAN_PARSE_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+
+    build_meta_from_file(path)
+}
+
+fn cached_meta_matches_disk(meta: &SessionMeta, path: &Path) -> bool {
+    let Ok((last_modified_ms, size_bytes)) = session_file_stats(path) else {
+        return false;
+    };
+    meta.last_modified_ms == last_modified_ms && meta.size_bytes == size_bytes
+}
+
+fn scan_sessions_on_disk(
+    project_session_dir: &Path,
+    cached_by_path: &HashMap<String, SessionMeta>,
+) -> ScanSessionsResult {
     let mut out = Vec::new();
     let mut failed_paths = Vec::new();
     let Ok(entries) = fs::read_dir(project_session_dir) else {
@@ -422,7 +453,15 @@ fn scan_sessions_on_disk(project_session_dir: &Path) -> ScanSessionsResult {
     for entry in entries.flatten() {
         let path = entry.path();
         if is_session_file_path(&path) {
-            match build_meta_from_file(&path) {
+            let path_key = path.display().to_string();
+            if cached_by_path
+                .get(&path_key)
+                .is_some_and(|meta| cached_meta_matches_disk(meta, &path))
+            {
+                continue;
+            }
+
+            match build_scanned_meta(&path) {
                 Ok(meta) => out.push(meta),
                 Err(_) => failed_paths.push(path),
             }
@@ -1137,7 +1176,7 @@ mod tests {
         // Also create a non-session file that should be ignored
         fs::write(tmp.path().join("notes.txt"), "not a session").expect("write");
 
-        let found = scan_sessions_on_disk(tmp.path());
+        let found = scan_sessions_on_disk(tmp.path(), &HashMap::new());
         assert_eq!(found.metas.len(), 1);
         assert_eq!(found.metas[0].id, "scan-test");
         assert!(found.failed_paths.is_empty());
@@ -1145,9 +1184,31 @@ mod tests {
 
     #[test]
     fn scan_sessions_on_disk_nonexistent_dir_returns_empty() {
-        let found = scan_sessions_on_disk(Path::new("/nonexistent/dir"));
+        let found = scan_sessions_on_disk(Path::new("/nonexistent/dir"), &HashMap::new());
         assert!(found.metas.is_empty());
         assert!(found.failed_paths.is_empty());
+    }
+
+    #[test]
+    fn scan_sessions_on_disk_skips_unchanged_cached_rows() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_path = tmp.path().join("session.jsonl");
+        let mut header = SessionHeader::new();
+        header.id = "cached-scan".to_string();
+        header.cwd = "/work".to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
+        fs::write(&session_path, serde_json::to_string(&header).unwrap()).expect("write");
+
+        let cached = build_meta_from_jsonl(&session_path).expect("cached meta");
+        let mut cached_by_path = HashMap::new();
+        cached_by_path.insert(cached.path.clone(), cached);
+
+        reset_session_scan_parse_count();
+        let found = scan_sessions_on_disk(tmp.path(), &cached_by_path);
+
+        assert!(found.metas.is_empty());
+        assert!(found.failed_paths.is_empty());
+        assert_eq!(take_session_scan_parse_count(), 0);
     }
 
     #[test]
@@ -1203,6 +1264,57 @@ mod tests {
         assert_eq!(session.size_bytes, expected.size_bytes);
         assert_eq!(session.name, expected.name);
         assert_eq!(session.last_modified_ms, expected.last_modified_ms);
+    }
+
+    #[test]
+    fn list_sessions_for_project_refreshes_index_after_changed_disk_session() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let base_dir = tmp.path().join("sessions");
+        let cwd = tmp.path().join("repo");
+        let project_dir = base_dir.join(encode_cwd(&cwd));
+        fs::create_dir_all(&project_dir).expect("create project sessions");
+
+        let session_path = project_dir.join("steady-state.jsonl");
+        let mut header = SessionHeader::new();
+        header.id = "steady-state".to_string();
+        header.cwd = cwd.display().to_string();
+        header.timestamp = "2025-06-01T12:00:00.000Z".to_string();
+
+        let initial = format!(
+            "{}\n{{\"type\":\"message\"}}\n{{\"type\":\"session_info\",\"name\":\"Initial\"}}\n",
+            serde_json::to_string(&header).expect("serialize header"),
+        );
+        fs::write(&session_path, initial).expect("write initial session");
+
+        let index = SessionIndex::for_sessions_root(&base_dir);
+        index.reindex_all().expect("seed session index");
+
+        let refreshed = format!(
+            "{}\n{{\"type\":\"message\"}}\n{{\"type\":\"message\"}}\n{{\"type\":\"session_info\",\"name\":\"Refreshed\"}}\n",
+            serde_json::to_string(&header).expect("serialize header"),
+        );
+        fs::write(&session_path, refreshed).expect("write refreshed session");
+
+        reset_session_scan_parse_count();
+        let sessions = list_sessions_for_project(&cwd, Some(&base_dir));
+        assert_eq!(take_session_scan_parse_count(), 1);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].message_count, 2);
+        assert_eq!(sessions[0].name.as_deref(), Some("Refreshed"));
+
+        let indexed = index
+            .list_sessions(Some(&cwd.display().to_string()))
+            .expect("list indexed sessions");
+        assert_eq!(indexed.len(), 1);
+        assert_eq!(indexed[0].message_count, 2);
+        assert_eq!(indexed[0].name.as_deref(), Some("Refreshed"));
+
+        reset_session_scan_parse_count();
+        let steady_state = list_sessions_for_project(&cwd, Some(&base_dir));
+        assert_eq!(take_session_scan_parse_count(), 0);
+        assert_eq!(steady_state.len(), 1);
+        assert_eq!(steady_state[0].message_count, 2);
+        assert_eq!(steady_state[0].name.as_deref(), Some("Refreshed"));
     }
 
     #[test]

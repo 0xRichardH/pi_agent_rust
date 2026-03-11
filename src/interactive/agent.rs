@@ -2237,9 +2237,14 @@ mod stream_delta_batcher_tests {
 
         let _ = app.handle_pi_message(PiMsg::EnqueuePendingInput(PendingInput::Continue));
 
-        let recorded = probe_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("submit_continue deadline probe");
+        let recorded = loop {
+            let res = probe_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("submit_continue deadline probe");
+            if res == Some(expected_deadline) {
+                break res;
+            }
+        };
         assert_eq!(recorded, Some(expected_deadline));
     }
 

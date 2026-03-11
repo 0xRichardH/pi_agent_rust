@@ -78,6 +78,10 @@ impl SessionIndex {
         self.upsert_meta(meta)
     }
 
+    pub(crate) fn upsert_session_meta(&self, meta: SessionMeta) -> Result<()> {
+        self.upsert_meta(meta)
+    }
+
     fn upsert_meta(&self, meta: SessionMeta) -> Result<()> {
         self.with_lock(|conn| {
             init_schema(conn)?;
