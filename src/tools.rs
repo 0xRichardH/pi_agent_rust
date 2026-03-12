@@ -4465,60 +4465,81 @@ async fn ingest_bash_chunk(chunk: Vec<u8>, state: &mut BashOutputState) -> Resul
                 options.mode(0o600);
             }
 
-            let file = options
-                .open(&path)
-                .map_err(|e| Error::tool("bash", format!("Failed to create temp file: {e}")))?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                file.metadata().ok().map(|m| m.ino())
-            }
-            #[cfg(not(unix))]
-            {
-                None
+            match options.open(&path) {
+                Ok(file) => {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        file.metadata().ok().map(|m| m.ino())
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        None
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create bash temp file: {e}");
+                    None
+                }
             }
         };
 
-        let mut file = asupersync::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .await
-            .map_err(|e| Error::tool("bash", format!("Failed to open temp file: {e}")))?;
-
-        // Validate identity to prevent TOCTOU/symlink attacks (someone replacing the file
-        // between creation and async open).
-        #[cfg(unix)]
-        if let Some(expected) = expected_inode {
-            use std::os::unix::fs::MetadataExt;
-            let meta = file
-                .metadata()
+        if expected_inode.is_some() || !cfg!(unix) {
+            match asupersync::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
                 .await
-                .map_err(|e| Error::tool("bash", format!("Failed to stat temp file: {e}")))?;
-            if meta.ino() != expected {
-                return Err(Error::tool(
-                    "bash",
-                    "Temp file identity mismatch (possible TOCTOU attack)".to_string(),
-                ));
-            }
-        }
+            {
+                Ok(mut file) => {
+                    let mut identity_match = true;
+                    #[cfg(unix)]
+                    if let Some(expected) = expected_inode {
+                        use std::os::unix::fs::MetadataExt;
+                        match file.metadata().await {
+                            Ok(meta) => {
+                                if meta.ino() != expected {
+                                    tracing::warn!("Temp file identity mismatch (possible TOCTOU attack)");
+                                    identity_match = false;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to stat temp file: {e}");
+                                identity_match = false;
+                            }
+                        }
+                    }
 
-        // Write buffered chunks to file first so it contains output from the beginning.
-        let mut failed_flush = false;
-        for existing in &state.chunks {
-            if let Err(e) = file.write_all(existing).await {
-                tracing::warn!("Failed to flush bash chunk to temp file: {e}");
-                failed_flush = true;
-                break;
-            }
-        }
+                    if identity_match {
+                        // Write buffered chunks to file first so it contains output from the beginning.
+                        let mut failed_flush = false;
+                        for existing in &state.chunks {
+                            if let Err(e) = file.write_all(existing).await {
+                                tracing::warn!("Failed to flush bash chunk to temp file: {e}");
+                                failed_flush = true;
+                                break;
+                            }
+                        }
 
-        if failed_flush {
-            state.spill_failed = true;
-            let _ = std::fs::remove_file(&path);
+                        if failed_flush {
+                            state.spill_failed = true;
+                            let _ = std::fs::remove_file(&path);
+                        } else {
+                            state.temp_file_path = Some(path);
+                            state.temp_file = Some(file);
+                        }
+                    } else {
+                        state.spill_failed = true;
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to open temp file async: {e}");
+                    state.spill_failed = true;
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
         } else {
-            state.temp_file_path = Some(path);
-            state.temp_file = Some(file);
+            state.spill_failed = true;
         }
     }
 

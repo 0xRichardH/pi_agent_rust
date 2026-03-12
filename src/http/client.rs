@@ -303,6 +303,10 @@ async fn write_all_with_retry<W: AsyncWrite + Unpin>(
                 "write returned Ok(0), backing off before retry"
             );
 
+            // Flushing the writer is crucial when TLS buffers are full, otherwise
+            // we will sleep and retry without any progress being made.
+            let _ = futures::future::poll_fn(|cx| Pin::new(&mut *writer).poll_flush(cx)).await;
+
             let now = asupersync::Cx::current()
                 .and_then(|cx| cx.timer_driver())
                 .map_or_else(wall_now, |timer| timer.now());
