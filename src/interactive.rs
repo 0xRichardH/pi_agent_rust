@@ -2342,10 +2342,12 @@ impl PiApp {
         self.run_memory_pressure_actions();
 
         // Handle our custom Pi messages (take ownership to avoid per-token clone).
-        let msg = match msg.downcast::<PiMsg>() {
-            Ok(pi_msg) => return self.handle_pi_message(pi_msg),
-            Err(msg) => msg,
-        };
+        if msg.is::<PiMsg>() {
+            let pi_msg = msg
+                .downcast::<PiMsg>()
+                .expect("PiMsg downcast should succeed after type check");
+            return self.handle_pi_message(pi_msg);
+        }
 
         if let Some(size) = msg.downcast_ref::<WindowSizeMsg>() {
             self.set_terminal_size(size.width as usize, size.height as usize);

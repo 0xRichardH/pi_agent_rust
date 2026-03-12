@@ -588,16 +588,18 @@ fn body_kind_from_headers(headers: &[(String, String)]) -> Result<BodyKind> {
     for (name, value) in headers {
         let name_lc = name.to_ascii_lowercase();
         if name_lc == "content-length" {
-            let parsed = value
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| Error::api("Invalid HTTP Content-Length header"))?;
-            if let Some(existing) = content_length {
-                if existing != parsed {
-                    return Err(Error::api("Conflicting HTTP Content-Length headers"));
+            for part in value.split(',') {
+                let parsed = part
+                    .trim()
+                    .parse::<usize>()
+                    .map_err(|_| Error::api("Invalid HTTP Content-Length header"))?;
+                if let Some(existing) = content_length {
+                    if existing != parsed {
+                        return Err(Error::api("Conflicting HTTP Content-Length headers"));
+                    }
+                } else {
+                    content_length = Some(parsed);
                 }
-            } else {
-                content_length = Some(parsed);
             }
         } else if name_lc == "transfer-encoding" {
             transfer_encoding = Some(value.to_ascii_lowercase());
@@ -1641,6 +1643,21 @@ mod tests {
             ("Content-Length".to_string(), "5".to_string()),
             ("content-length".to_string(), "7".to_string()),
         ];
+        assert!(body_kind_from_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn body_kind_coalesced_identical_content_length_is_accepted() {
+        let headers = vec![("Content-Length".to_string(), "5, 5".to_string())];
+        assert!(matches!(
+            body_kind_from_headers(&headers).unwrap(),
+            BodyKind::ContentLength(5)
+        ));
+    }
+
+    #[test]
+    fn body_kind_coalesced_conflicting_content_length_is_error() {
+        let headers = vec![("Content-Length".to_string(), "5, 7".to_string())];
         assert!(body_kind_from_headers(&headers).is_err());
     }
 

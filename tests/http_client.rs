@@ -307,6 +307,36 @@ fn invalid_content_length_is_error() {
 }
 
 #[test]
+fn coalesced_identical_content_length_is_accepted() {
+    let harness = TestHarness::new("http_client_coalesced_identical_content_length_is_accepted");
+
+    let server = OneShotServer::start(|mut stream, _request| {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Length: 5, 5\r\n",
+            "Connection: keep-alive\r\n",
+            "\r\n",
+            "hello"
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write response");
+        stream.flush().expect("flush response");
+    });
+
+    let url = server.url("/coalesced-content-length");
+    let body = common::run_async(async move {
+        let response = Client::new().get(&url).send().await.expect("send");
+        assert_eq!(response.status(), 200);
+        response.text().await.expect("text")
+    });
+
+    server.join();
+    assert_eq!(body, "hello");
+    write_logs_artifact(&harness);
+}
+
+#[test]
 fn oversized_response_headers_is_error() {
     let harness = TestHarness::new("http_client_oversized_response_headers_is_error");
 
