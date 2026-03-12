@@ -1839,7 +1839,11 @@ fn collect_search_hits(
     limit: usize,
     query: &str,
 ) -> Vec<pi::extension_index::ExtensionSearchHit> {
-    let mut hits = index.search(query, limit);
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let mut hits = index.search(query, index.entries.len());
 
     // Filter by tag if requested
     if let Some(tag_filter) = tag {
@@ -1862,6 +1866,7 @@ fn collect_search_hits(
         });
     }
 
+    hits.truncate(limit);
     hits
 }
 
@@ -4923,6 +4928,40 @@ mod tests {
             provider_choice_from_token("dashscope").unwrap().provider,
             "alibaba"
         );
+    }
+
+    #[test]
+    fn collect_search_hits_filters_by_tag_before_limit() {
+        let index = pi::extension_index::ExtensionIndex {
+            schema: pi::extension_index::EXTENSION_INDEX_SCHEMA.to_string(),
+            version: pi::extension_index::EXTENSION_INDEX_VERSION,
+            generated_at: None,
+            last_refreshed_at: None,
+            entries: vec![
+                pi::extension_index::ExtensionIndexEntry {
+                    id: "npm/aaa-foo".to_string(),
+                    name: "aaa-foo".to_string(),
+                    description: Some("general extension".to_string()),
+                    tags: vec!["general".to_string()],
+                    license: None,
+                    source: None,
+                    install_source: Some("npm:aaa-foo".to_string()),
+                },
+                pi::extension_index::ExtensionIndexEntry {
+                    id: "npm/zzz-foo".to_string(),
+                    name: "zzz-foo".to_string(),
+                    description: Some("automation extension".to_string()),
+                    tags: vec!["automation".to_string()],
+                    license: None,
+                    source: None,
+                    install_source: Some("npm:zzz-foo".to_string()),
+                },
+            ],
+        };
+
+        let hits = collect_search_hits(&index, Some("automation"), "relevance", 1, "foo");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].entry.id, "npm/zzz-foo");
     }
 
     #[test]
