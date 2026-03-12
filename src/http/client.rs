@@ -27,6 +27,15 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
 const MAX_BUFFERED_BYTES: usize = 256 * 1024;
 const MAX_TEXT_BODY_BYTES: usize = 50 * 1024 * 1024;
+
+/// Maximum number of consecutive `Ok(0)` returns from `poll_write` before we
+/// give up and surface `ErrorKind::WriteZero`.  TLS transports can temporarily
+/// return 0 when internal buffers are full; a short backoff usually unblocks
+/// the next write.
+const WRITE_ZERO_MAX_RETRIES: usize = 10;
+
+/// Initial backoff duration when a write returns `Ok(0)`.
+const WRITE_ZERO_BACKOFF: std::time::Duration = std::time::Duration::from_millis(10);
 #[cfg(not(test))]
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 60;
 
@@ -255,6 +264,62 @@ impl<'a> RequestBuilder<'a> {
     }
 }
 
+/// Like `write_all`, but retries on `Ok(0)` with exponential backoff instead
+/// of immediately failing with `ErrorKind::WriteZero`.
+///
+/// TLS transports (and, less commonly, TCP under memory pressure) can return
+/// `Ok(0)` from `write()` when internal buffers are temporarily full.  The
+/// standard `write_all` implementation treats this as an unrecoverable error,
+/// which causes spurious "IO error: write zero" failures — especially for
+/// large request bodies such as resumed session contexts.
+async fn write_all_with_retry<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    mut buf: &[u8],
+) -> std::io::Result<()> {
+    use asupersync::time::{sleep, wall_now};
+
+    let mut consecutive_zeros: usize = 0;
+    let mut backoff = WRITE_ZERO_BACKOFF;
+
+    while !buf.is_empty() {
+        let n = futures::future::poll_fn(|cx| Pin::new(&mut *writer).poll_write(cx, buf)).await?;
+
+        if n == 0 {
+            consecutive_zeros += 1;
+            if consecutive_zeros > WRITE_ZERO_MAX_RETRIES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    format!(
+                        "transport returned Ok(0) {} consecutive times ({} bytes remaining)",
+                        consecutive_zeros,
+                        buf.len(),
+                    ),
+                ));
+            }
+            tracing::debug!(
+                attempt = consecutive_zeros,
+                remaining = buf.len(),
+                backoff_ms = backoff.as_millis(),
+                "write returned Ok(0), backing off before retry"
+            );
+
+            let now = asupersync::Cx::current()
+                .and_then(|cx| cx.timer_driver())
+                .map_or_else(wall_now, |timer| timer.now());
+            sleep(now, backoff).await;
+
+            // Exponential backoff: 10ms, 20ms, 40ms, …
+            backoff = backoff.saturating_mul(2);
+        } else {
+            // Successful partial write — advance the buffer and reset retry state.
+            buf = &buf[n..];
+            consecutive_zeros = 0;
+            backoff = WRITE_ZERO_BACKOFF;
+        }
+    }
+    Ok(())
+}
+
 async fn send_parts(
     client: &Client,
     method: Method,
@@ -270,9 +335,9 @@ async fn send_parts(
     let mut transport = connect_transport(&parsed, client).await?;
 
     let request_bytes = build_request_bytes(method, &parsed, &client.user_agent, headers, body);
-    transport.write_all(&request_bytes).await?;
+    write_all_with_retry(&mut transport, &request_bytes).await?;
     if !body.is_empty() {
-        transport.write_all(body).await?;
+        write_all_with_retry(&mut transport, body).await?;
     }
     transport.flush().await?;
 
