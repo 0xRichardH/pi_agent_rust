@@ -14,7 +14,7 @@ use crate::theme::Theme;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
     payload.downcast::<String>().map_or_else(
@@ -528,7 +528,7 @@ pub async fn discover_package_resources(manager: &PackageManager) -> Result<Pack
         }
 
         if let Some(pi) = read_pi_manifest(&root)? {
-            append_resources_from_manifest(&mut resources, &root, &pi);
+            append_resources_from_manifest(&mut resources, &root, &pi)?;
         } else {
             append_resources_from_defaults(&mut resources, &root);
         }
@@ -564,19 +564,43 @@ fn read_pi_manifest(root: &Path) -> Result<Option<Value>> {
     }
 }
 
-fn append_resources_from_manifest(resources: &mut PackageResources, root: &Path, pi: &Value) {
+fn append_resources_from_manifest(
+    resources: &mut PackageResources,
+    root: &Path,
+    pi: &Value,
+) -> Result<()> {
     let Some(obj) = pi.as_object() else {
-        return;
+        return Ok(());
     };
     append_resource_paths(
         resources,
         root,
         obj.get("extensions"),
         ResourceKind::Extensions,
-    );
-    append_resource_paths(resources, root, obj.get("skills"), ResourceKind::Skills);
-    append_resource_paths(resources, root, obj.get("prompts"), ResourceKind::Prompts);
-    append_resource_paths(resources, root, obj.get("themes"), ResourceKind::Themes);
+        "extensions",
+    )?;
+    append_resource_paths(
+        resources,
+        root,
+        obj.get("skills"),
+        ResourceKind::Skills,
+        "skills",
+    )?;
+    append_resource_paths(
+        resources,
+        root,
+        obj.get("prompts"),
+        ResourceKind::Prompts,
+        "prompts",
+    )?;
+    append_resource_paths(
+        resources,
+        root,
+        obj.get("themes"),
+        ResourceKind::Themes,
+        "themes",
+    )?;
+    Ok(())
 }
 
 fn append_resources_from_defaults(resources: &mut PackageResources, root: &Path) {
@@ -613,21 +637,19 @@ fn append_resource_paths(
     root: &Path,
     value: Option<&Value>,
     kind: ResourceKind,
-) {
+    field_name: &str,
+) -> Result<()> {
     let Some(value) = value else {
-        return;
+        return Ok(());
     };
-    let paths = extract_string_list(value);
+    let manifest_path = root.join("package.json");
+    let paths = extract_manifest_string_list(&manifest_path, field_name, value)?;
     if paths.is_empty() {
-        return;
+        return Ok(());
     }
 
     for path in paths {
-        let resolved = if Path::new(&path).is_absolute() {
-            PathBuf::from(path)
-        } else {
-            root.join(path)
-        };
+        let resolved = resolve_manifest_resource_path(root, &manifest_path, field_name, &path)?;
         match kind {
             ResourceKind::Extensions => resources.extensions.push(resolved),
             ResourceKind::Skills => resources.skills.push(resolved),
@@ -635,18 +657,98 @@ fn append_resource_paths(
             ResourceKind::Themes => resources.themes.push(resolved),
         }
     }
+    Ok(())
 }
 
-fn extract_string_list(value: &Value) -> Vec<String> {
+fn extract_manifest_string_list(
+    manifest_path: &Path,
+    field_name: &str,
+    value: &Value,
+) -> Result<Vec<String>> {
     match value {
-        Value::String(s) => vec![s.clone()],
+        Value::String(s) => Ok(vec![validate_manifest_resource_string(
+            manifest_path,
+            field_name,
+            s,
+        )?]),
         Value::Array(items) => items
             .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
+            .map(|item| {
+                item.as_str().ok_or_else(|| {
+                    Error::config(format!(
+                        "Invalid package manifest {}: `pi.{field_name}` must be a string or array of strings",
+                        manifest_path.display()
+                    ))
+                }).and_then(|path| validate_manifest_resource_string(manifest_path, field_name, path))
+            })
             .collect(),
-        _ => Vec::new(),
+        _ => Err(Error::config(format!(
+            "Invalid package manifest {}: `pi.{field_name}` must be a string or array of strings",
+            manifest_path.display()
+        ))),
     }
+}
+
+fn validate_manifest_resource_string(
+    manifest_path: &Path,
+    field_name: &str,
+    value: &str,
+) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(Error::config(format!(
+            "Invalid package manifest {}: `pi.{field_name}` entries must be non-empty paths",
+            manifest_path.display()
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn resolve_manifest_resource_path(
+    root: &Path,
+    manifest_path: &Path,
+    field_name: &str,
+    raw_path: &str,
+) -> Result<PathBuf> {
+    let relative = Path::new(raw_path);
+    if relative.is_absolute() {
+        return Err(Error::config(format!(
+            "Invalid package manifest {}: `pi.{field_name}` paths must stay within the package root",
+            manifest_path.display()
+        )));
+    }
+
+    let mut depth = 0usize;
+    for component in relative.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(_) => depth = depth.saturating_add(1),
+            Component::ParentDir => {
+                if depth == 0 {
+                    return Err(Error::config(format!(
+                        "Invalid package manifest {}: `pi.{field_name}` paths must stay within the package root",
+                        manifest_path.display()
+                    )));
+                }
+                depth -= 1;
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::config(format!(
+                    "Invalid package manifest {}: `pi.{field_name}` paths must stay within the package root",
+                    manifest_path.display()
+                )));
+            }
+        }
+    }
+
+    let resolved = root.join(relative);
+    if resolved.exists() && !is_under_path(&resolved, root) {
+        return Err(Error::config(format!(
+            "Invalid package manifest {}: `pi.{field_name}` paths must stay within the package root",
+            manifest_path.display()
+        )));
+    }
+    Ok(resolved)
 }
 
 // ============================================================================
@@ -2373,16 +2475,29 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_string_list_variants() {
+    fn test_extract_manifest_string_list_variants() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("package.json");
         assert_eq!(
-            extract_string_list(&Value::String("one".to_string())),
+            extract_manifest_string_list(
+                &manifest_path,
+                "extensions",
+                &Value::String("one".to_string())
+            )
+            .expect("single string should parse"),
             vec!["one".to_string()]
         );
         assert_eq!(
-            extract_string_list(&json!(["one", 2, "three", true, null])),
+            extract_manifest_string_list(&manifest_path, "extensions", &json!(["one", "three"]))
+                .expect("string arrays should parse"),
             vec!["one".to_string(), "three".to_string()]
         );
-        assert!(extract_string_list(&json!({"a": 1})).is_empty());
+        let err = extract_manifest_string_list(&manifest_path, "extensions", &json!({"a": 1}))
+            .expect_err("objects should be rejected");
+        assert!(
+            err.to_string()
+                .contains("`pi.extensions` must be a string or array of strings")
+        );
     }
 
     #[test]
@@ -3088,6 +3203,38 @@ still frontmatter",
 
         let pi = read_pi_manifest(tmp.path()).expect("missing `pi` key should not error");
         assert!(pi.is_none());
+    }
+
+    #[test]
+    fn test_append_resources_from_manifest_errors_on_invalid_resource_entry_type() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pi = json!({
+            "extensions": ["ok", 7]
+        });
+
+        let mut resources = PackageResources::default();
+        let err = append_resources_from_manifest(&mut resources, tmp.path(), &pi)
+            .expect_err("non-string manifest entries must error");
+        assert!(
+            err.to_string()
+                .contains("`pi.extensions` must be a string or array of strings")
+        );
+    }
+
+    #[test]
+    fn test_append_resources_from_manifest_errors_on_outside_root_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pi = json!({
+            "skills": "../outside/skills"
+        });
+
+        let mut resources = PackageResources::default();
+        let err = append_resources_from_manifest(&mut resources, tmp.path(), &pi)
+            .expect_err("outside-root manifest paths must error");
+        assert!(
+            err.to_string()
+                .contains("`pi.skills` paths must stay within the package root")
+        );
     }
 
     // ── load_skill_from_file with valid skill ──────────────────────────

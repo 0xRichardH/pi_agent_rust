@@ -662,7 +662,8 @@ fn body_kind_from_response(status: u16, headers: &[(String, String)]) -> Result<
 
 fn body_kind_from_headers(headers: &[(String, String)]) -> Result<BodyKind> {
     let mut content_length = None;
-    let mut transfer_encoding = None;
+    let mut transfer_encodings = Vec::new();
+    let mut saw_transfer_encoding = false;
 
     for (name, value) in headers {
         let name_lc = name.to_ascii_lowercase();
@@ -681,14 +682,25 @@ fn body_kind_from_headers(headers: &[(String, String)]) -> Result<BodyKind> {
                 }
             }
         } else if name_lc == "transfer-encoding" {
-            transfer_encoding = Some(value.to_ascii_lowercase());
+            saw_transfer_encoding = true;
+            transfer_encodings.extend(
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_ascii_lowercase()),
+            );
         }
     }
 
-    if let Some(te) = transfer_encoding {
-        if te.split(',').any(|v| v.trim() == "chunked") {
+    if saw_transfer_encoding {
+        let Some(last) = transfer_encodings.last() else {
+            return Err(Error::api("Invalid HTTP Transfer-Encoding header"));
+        };
+        if last == "chunked" {
             return Ok(BodyKind::Chunked);
         }
+        return Err(Error::api("Unsupported HTTP Transfer-Encoding header"));
     }
 
     Ok(match content_length {
@@ -1204,6 +1216,33 @@ mod tests {
             body_kind_from_headers(&headers).unwrap(),
             BodyKind::Chunked
         ));
+    }
+
+    #[test]
+    fn body_kind_repeated_transfer_encoding_headers_are_aggregated() {
+        let headers = vec![
+            ("Transfer-Encoding".to_string(), "gzip".to_string()),
+            ("Transfer-Encoding".to_string(), "chunked".to_string()),
+        ];
+        assert!(matches!(
+            body_kind_from_headers(&headers).unwrap(),
+            BodyKind::Chunked
+        ));
+    }
+
+    #[test]
+    fn body_kind_rejects_transfer_encoding_when_chunked_is_not_final() {
+        let headers = vec![
+            ("Transfer-Encoding".to_string(), "chunked".to_string()),
+            ("Transfer-Encoding".to_string(), "gzip".to_string()),
+        ];
+        assert!(body_kind_from_headers(&headers).is_err());
+    }
+
+    #[test]
+    fn body_kind_rejects_non_chunked_transfer_encoding() {
+        let headers = vec![("Transfer-Encoding".to_string(), "gzip".to_string())];
+        assert!(body_kind_from_headers(&headers).is_err());
     }
 
     #[test]
