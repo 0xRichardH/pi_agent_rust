@@ -590,16 +590,51 @@ fn category_for_extension(
     api_entry: Option<&ApiMatrixEntry>,
 ) -> ExtensionCategory {
     if let Some(api) = api_entry {
-        if !api.registration_types.is_empty() {
-            return crate::extension_inclusion::classify_registrations(
-                &api.registration_types
-                    .iter()
-                    .map(|r| format!("register{}", capitalize_first(r)))
-                    .collect::<Vec<_>>(),
-            );
+        let registrations = api
+            .registration_types
+            .iter()
+            .map(|registration| registration_type_to_classifier_name(registration))
+            .filter(|registration| !registration.is_empty())
+            .collect::<Vec<_>>();
+        if !registrations.is_empty() {
+            return crate::extension_inclusion::classify_registrations(&registrations);
         }
     }
     entry.category.clone()
+}
+
+fn registration_type_to_classifier_name(registration: &str) -> String {
+    let trimmed = registration.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("register") {
+        return trimmed.to_string();
+    }
+
+    match trimmed.replace('-', "_").as_str() {
+        "tool" => "registerTool".to_string(),
+        "command" => "registerCommand".to_string(),
+        "slash_command" => "registerSlashCommand".to_string(),
+        "provider" => "registerProvider".to_string(),
+        "event" => "registerEvent".to_string(),
+        "event_hook" => "registerEventHook".to_string(),
+        "message_renderer" | "ui" => "registerMessageRenderer".to_string(),
+        "flag" => "registerFlag".to_string(),
+        "shortcut" => "registerShortcut".to_string(),
+        normalized => {
+            let suffix = normalized
+                .split('_')
+                .filter(|part| !part.is_empty())
+                .map(capitalize_first)
+                .collect::<String>();
+            if suffix.is_empty() {
+                String::new()
+            } else {
+                format!("register{suffix}")
+            }
+        }
+    }
 }
 
 fn capitalize_first(s: &str) -> String {
@@ -883,6 +918,86 @@ mod tests {
         assert_eq!(capitalize_first("tool"), "Tool");
         assert_eq!(capitalize_first(""), "");
         assert_eq!(capitalize_first("a"), "A");
+    }
+
+    #[test]
+    fn registration_type_to_classifier_name_handles_snake_case_event_hook() {
+        assert_eq!(
+            registration_type_to_classifier_name("event_hook"),
+            "registerEventHook"
+        );
+    }
+
+    #[test]
+    fn category_for_extension_uses_api_matrix_event_hook_category() {
+        let entry = InclusionEntry {
+            id: "event-hook-ext".into(),
+            name: Some("event-hook-ext".into()),
+            tier: Some("tier-1".into()),
+            score: Some(50.0),
+            category: ExtensionCategory::General,
+            registrations: Vec::new(),
+            version_pin: None,
+            sha256: None,
+            artifact_path: None,
+            license: None,
+            source_tier: None,
+            rationale: None,
+            directory: None,
+            provenance: None,
+            capabilities: None,
+            risk_level: None,
+            inclusion_rationale: None,
+        };
+        let api_entry = ApiMatrixEntry {
+            registration_types: vec!["event_hook".into()],
+            hostcalls: Vec::new(),
+            capabilities_required: Vec::new(),
+            events_listened: Vec::new(),
+            node_apis: Vec::new(),
+            third_party_deps: Vec::new(),
+        };
+
+        assert_eq!(
+            category_for_extension(&entry, Some(&api_entry)),
+            ExtensionCategory::EventHook
+        );
+    }
+
+    #[test]
+    fn category_for_extension_uses_api_matrix_multi_type_category() {
+        let entry = InclusionEntry {
+            id: "event-provider-ext".into(),
+            name: Some("event-provider-ext".into()),
+            tier: Some("tier-1".into()),
+            score: Some(70.0),
+            category: ExtensionCategory::Provider,
+            registrations: Vec::new(),
+            version_pin: None,
+            sha256: None,
+            artifact_path: None,
+            license: None,
+            source_tier: None,
+            rationale: None,
+            directory: None,
+            provenance: None,
+            capabilities: None,
+            risk_level: None,
+            inclusion_rationale: None,
+        };
+        let api_entry = ApiMatrixEntry {
+            registration_types: vec!["event_hook".into(), "provider".into()],
+            hostcalls: Vec::new(),
+            capabilities_required: Vec::new(),
+            events_listened: Vec::new(),
+            node_apis: Vec::new(),
+            third_party_deps: Vec::new(),
+        };
+
+        assert_eq!(
+            category_for_extension(&entry, Some(&api_entry)),
+            ExtensionCategory::Multi
+        );
     }
 
     #[test]
