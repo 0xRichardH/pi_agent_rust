@@ -1547,7 +1547,7 @@ fn is_sensitive_json_key(key: &str) -> bool {
         || normalized.contains("authorization")
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OAuthStartInfo {
     pub provider: String,
     pub url: String,
@@ -1556,6 +1556,13 @@ pub struct OAuthStartInfo {
     /// The redirect URI used in the authorization request.
     /// When this points to localhost, a local callback server should be started.
     pub redirect_uri: Option<String>,
+    /// Pre-bound callback server (already listening).
+    ///
+    /// When a provider binds a random-port localhost listener at start time
+    /// (e.g. GitHub Copilot, GitLab), the server is stored here so the caller
+    /// does not need to bind a second time.  If `Some`, the caller should use
+    /// this server directly instead of calling [`start_oauth_callback_server`].
+    pub callback_server: Option<OAuthCallbackServer>,
 }
 
 // ── Local OAuth callback server ─────────────────────────────────
@@ -1571,7 +1578,17 @@ pub struct OAuthCallbackServer {
     pub rx: std::sync::mpsc::Receiver<String>,
     /// The port the server is listening on (for logging/diagnostics).
     pub port: u16,
+    // Note: `_handle` is kept for the thread join handle, which keeps the
+    // listener thread alive until this struct is dropped.
     _handle: std::thread::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for OAuthCallbackServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthCallbackServer")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Start a local TCP listener on the port specified in `redirect_uri`.
@@ -1680,6 +1697,86 @@ fn parse_port_from_uri(uri: &str) -> Option<u16> {
 pub fn redirect_uri_needs_callback_server(redirect_uri: &str) -> bool {
     let lower = redirect_uri.to_lowercase();
     lower.starts_with("http://localhost:") || lower.starts_with("http://127.0.0.1:")
+}
+
+/// Start a local TCP listener on a random available port and return both the
+/// callback server and the `http://localhost:{port}/callback` redirect URI.
+///
+/// This is useful for OAuth providers (like GitHub Copilot and GitLab) that
+/// accept localhost redirect URIs but don't have a fixed port pre-registered.
+/// The caller should include the returned `redirect_uri` in the authorization
+/// URL query parameters.
+pub fn start_oauth_callback_server_random_port() -> Result<(OAuthCallbackServer, String)> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| {
+        Error::auth(format!(
+            "Failed to bind OAuth callback server on random port: {e}"
+        ))
+    })?;
+
+    let port = listener.local_addr().map_err(|e| {
+        Error::auth(format!(
+            "Failed to get local address of OAuth callback listener: {e}"
+        ))
+    })?.port();
+
+    let redirect_uri = format!("http://localhost:{port}/callback");
+
+    listener
+        .set_nonblocking(false)
+        .map_err(|e| Error::auth(format!("Failed to configure callback listener: {e}")))?;
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+
+    let handle = std::thread::spawn(move || {
+        let Ok((mut stream, _addr)) = listener.accept() else {
+            return;
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+
+        let mut buf = [0u8; 4096];
+        let Ok(n) = stream.read(&mut buf) else {
+            return;
+        };
+
+        let request = String::from_utf8_lossy(&buf[..n]);
+        let request_path = request
+            .lines()
+            .next()
+            .and_then(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        let html = r#"<!DOCTYPE html>
+<html><head><title>Pi Agent — OAuth Complete</title></head>
+<body style="font-family:system-ui,sans-serif;text-align:center;padding:60px 20px;background:#f8f9fa">
+<h1 style="color:#2d7d46">&#10003; Authorization successful</h1>
+<p>You can close this browser tab and return to Pi Agent.</p>
+</body></html>"#;
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+            html.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
+
+        let _ = tx.send(request_path);
+    });
+
+    Ok((
+        OAuthCallbackServer {
+            rx,
+            port,
+            _handle: handle,
+        },
+        redirect_uri,
+    ))
 }
 
 // ── Device Flow (RFC 8628) ──────────────────────────────────────
@@ -2078,6 +2175,7 @@ pub fn start_anthropic_oauth() -> Result<OAuthStartInfo> {
                 .to_string(),
         ),
         redirect_uri: Some(ANTHROPIC_OAUTH_REDIRECT_URI.to_string()),
+        callback_server: None,
     })
 }
 
@@ -2204,6 +2302,7 @@ pub fn start_openai_codex_oauth() -> Result<OAuthStartInfo> {
                 .to_string(),
         ),
         redirect_uri: Some(OPENAI_CODEX_OAUTH_REDIRECT_URI.to_string()),
+        callback_server: None,
     })
 }
 
@@ -2291,6 +2390,7 @@ pub fn start_google_gemini_cli_oauth() -> Result<OAuthStartInfo> {
                 .to_string(),
         ),
         redirect_uri: Some(GOOGLE_GEMINI_CLI_OAUTH_REDIRECT_URI.to_string()),
+        callback_server: None,
     })
 }
 
@@ -2321,6 +2421,7 @@ pub fn start_google_antigravity_oauth() -> Result<OAuthStartInfo> {
                 .to_string(),
         ),
         redirect_uri: Some(GOOGLE_ANTIGRAVITY_OAUTH_REDIRECT_URI.to_string()),
+        callback_server: None,
     })
 }
 
@@ -2850,6 +2951,7 @@ pub fn start_extension_oauth(
                 .to_string(),
         ),
         redirect_uri: config.redirect_uri.clone(),
+        callback_server: None,
     })
 }
 
@@ -3030,17 +3132,26 @@ pub fn start_copilot_browser_oauth(config: &CopilotOAuthConfig) -> Result<OAuthS
         )
     };
 
-    let url = build_url_with_query(
-        &auth_url,
-        &[
-            ("client_id", &config.client_id),
-            ("response_type", "code"),
-            ("scope", &config.scopes),
-            ("code_challenge", &challenge),
-            ("code_challenge_method", "S256"),
-            ("state", &verifier),
-        ],
-    );
+    // Bind a localhost callback server on a random port so the browser redirect
+    // is captured automatically (issue #22).  GitHub OAuth supports any
+    // localhost redirect URI for public OAuth Apps.
+    let callback = start_oauth_callback_server_random_port().ok();
+    let redirect_uri = callback.as_ref().map(|(_, uri)| uri.clone());
+
+    let mut params: Vec<(&str, &str)> = vec![
+        ("client_id", &config.client_id),
+        ("response_type", "code"),
+        ("scope", &config.scopes),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("state", &verifier),
+    ];
+    let redirect_ref = redirect_uri.as_deref();
+    if let Some(uri) = redirect_ref {
+        params.push(("redirect_uri", uri));
+    }
+
+    let url = build_url_with_query(&auth_url, &params);
 
     Ok(OAuthStartInfo {
         provider: "github-copilot".to_string(),
@@ -3051,7 +3162,10 @@ pub fn start_copilot_browser_oauth(config: &CopilotOAuthConfig) -> Result<OAuthS
              then paste the callback URL or authorization code."
                 .to_string(),
         ),
-        redirect_uri: None,
+        redirect_uri,
+        // Pre-bound callback server — caller should use this instead of
+        // starting a new one (the port is already bound).
+        callback_server: callback.map(|(server, _)| server),
     })
 }
 
@@ -3327,6 +3441,17 @@ pub fn start_gitlab_oauth(config: &GitLabOAuthConfig) -> Result<OAuthStartInfo> 
     let base = trim_trailing_slash(&config.base_url);
     let auth_url = format!("{base}{GITLAB_OAUTH_AUTHORIZE_PATH}");
 
+    // If no redirect_uri is configured, bind a random-port localhost callback
+    // server so the browser redirect is captured automatically (issue #22).
+    let (redirect_uri, callback_server) = if config.redirect_uri.is_some() {
+        (config.redirect_uri.clone(), None)
+    } else {
+        match start_oauth_callback_server_random_port() {
+            Ok((server, uri)) => (Some(uri), Some(server)),
+            Err(_) => (None, None),
+        }
+    };
+
     let mut params: Vec<(&str, &str)> = vec![
         ("client_id", &config.client_id),
         ("response_type", "code"),
@@ -3336,7 +3461,7 @@ pub fn start_gitlab_oauth(config: &GitLabOAuthConfig) -> Result<OAuthStartInfo> 
         ("state", &verifier),
     ];
 
-    let redirect_ref = config.redirect_uri.as_deref();
+    let redirect_ref = redirect_uri.as_deref();
     if let Some(uri) = redirect_ref {
         params.push(("redirect_uri", uri));
     }
@@ -3351,7 +3476,8 @@ pub fn start_gitlab_oauth(config: &GitLabOAuthConfig) -> Result<OAuthStartInfo> 
             "Open the URL to authorize GitLab access on {base}, \
              then paste the callback URL or authorization code."
         )),
-        redirect_uri: config.redirect_uri.clone(),
+        redirect_uri,
+        callback_server,
     })
 }
 
@@ -6491,6 +6617,8 @@ mod tests {
 
     #[test]
     fn test_gitlab_oauth_no_redirect_uri() {
+        // When no redirect_uri is configured, a random-port localhost callback
+        // server should be auto-created so the browser redirect is captured.
         let config = GitLabOAuthConfig {
             client_id: "gl_no_redirect".to_string(),
             base_url: GITLAB_DEFAULT_BASE_URL.to_string(),
@@ -6502,9 +6630,23 @@ mod tests {
         let (_, query) = info.url.split_once('?').expect("missing query");
         let params: std::collections::HashMap<_, _> =
             parse_query_pairs(query).into_iter().collect();
+
+        // The auto-generated localhost redirect_uri should be present in the
+        // authorize URL and the callback_server should be pre-bound.
         assert!(
-            !params.contains_key("redirect_uri"),
-            "redirect_uri should be absent"
+            info.redirect_uri
+                .as_deref()
+                .is_some_and(|uri| uri.starts_with("http://localhost:")),
+            "auto-generated redirect_uri should be a localhost URL, got {:?}",
+            info.redirect_uri
+        );
+        assert!(
+            params.contains_key("redirect_uri"),
+            "redirect_uri should be included in the authorize URL"
+        );
+        assert!(
+            info.callback_server.is_some(),
+            "callback_server should be pre-bound"
         );
     }
 

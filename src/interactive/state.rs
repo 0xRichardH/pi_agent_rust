@@ -270,6 +270,22 @@ impl SessionPickerOverlay {
         }
     }
 
+    pub(super) fn select_page_down(&mut self) {
+        if self.sessions.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = (self.selected + step).min(self.sessions.len().saturating_sub(1));
+    }
+
+    pub(super) fn select_page_up(&mut self) {
+        if self.sessions.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = self.selected.saturating_sub(step);
+    }
+
     pub(super) fn selected_session(&self) -> Option<&SessionMeta> {
         self.sessions.get(self.selected)
     }
@@ -433,6 +449,22 @@ impl ThemePickerOverlay {
         }
     }
 
+    pub(super) fn select_page_down(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = (self.selected + step).min(self.items.len().saturating_sub(1));
+    }
+
+    pub(super) fn select_page_up(&mut self) {
+        if self.items.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = self.selected.saturating_sub(step);
+    }
+
     pub(super) const fn scroll_offset(&self) -> usize {
         if self.selected < self.max_visible {
             0
@@ -488,6 +520,22 @@ impl SettingsUiState {
                 .checked_sub(1)
                 .unwrap_or(self.entries.len() - 1);
         }
+    }
+
+    pub(super) fn select_page_down(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = (self.selected + step).min(self.entries.len().saturating_sub(1));
+    }
+
+    pub(super) fn select_page_up(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = self.selected.saturating_sub(step);
     }
 
     pub(super) fn selected_entry(&self) -> Option<SettingsUiEntry> {
@@ -654,6 +702,22 @@ impl BranchPickerOverlay {
                 .checked_sub(1)
                 .unwrap_or(self.branches.len() - 1);
         }
+    }
+
+    pub(super) fn select_page_down(&mut self) {
+        if self.branches.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = (self.selected + step).min(self.branches.len().saturating_sub(1));
+    }
+
+    pub(super) fn select_page_up(&mut self) {
+        if self.branches.is_empty() {
+            return;
+        }
+        let step = self.max_visible.saturating_sub(1).max(1);
+        self.selected = self.selected.saturating_sub(step);
     }
 
     pub(super) const fn scroll_offset(&self) -> usize {

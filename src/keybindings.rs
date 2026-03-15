@@ -1350,8 +1350,14 @@ impl KeyBindings {
         );
         m.insert(AppAction::JumpForward, vec![KeyBinding::ctrl("]")]);
         m.insert(AppAction::JumpBackward, vec![KeyBinding::ctrl_alt("]")]);
-        m.insert(AppAction::PageUp, vec![KeyBinding::plain("pageup")]);
-        m.insert(AppAction::PageDown, vec![KeyBinding::plain("pagedown")]);
+        m.insert(
+            AppAction::PageUp,
+            vec![KeyBinding::plain("pageup"), KeyBinding::shift("up")],
+        );
+        m.insert(
+            AppAction::PageDown,
+            vec![KeyBinding::plain("pagedown"), KeyBinding::shift("down")],
+        );
 
         // Deletion
         m.insert(

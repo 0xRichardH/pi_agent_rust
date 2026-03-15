@@ -1931,13 +1931,15 @@ After approving access in the browser, press Enter in Pi to complete login.",
 
         match oauth_result {
             Ok((info, ext_config)) => {
-                // Start a local callback server for localhost redirect URIs
-                // so the browser redirect is captured automatically (issue #22).
-                let callback_server = info
-                    .redirect_uri
-                    .as_deref()
-                    .filter(|uri| crate::auth::redirect_uri_needs_callback_server(uri))
-                    .and_then(|uri| crate::auth::start_oauth_callback_server(uri).ok());
+                // Use the pre-bound callback server when the provider already
+                // created one (e.g. Copilot/GitLab with random port).  Otherwise
+                // start a new one for localhost redirect URIs (issue #22).
+                let callback_server = info.callback_server.or_else(|| {
+                    info.redirect_uri
+                        .as_deref()
+                        .filter(|uri| crate::auth::redirect_uri_needs_callback_server(uri))
+                        .and_then(|uri| crate::auth::start_oauth_callback_server(uri).ok())
+                });
 
                 let mut message = format!(
                     "OAuth login: {}\n\nOpen this URL:\n{}\n",

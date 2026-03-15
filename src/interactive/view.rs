@@ -1256,7 +1256,7 @@ impl PiApp {
                 output,
                 "  {}",
                 self.styles.muted_italic.render(
-                    "Type: filter  Backspace: clear  ↑/↓/j/k: navigate  Enter: select  Ctrl+D: delete  Esc/q: cancel",
+                    "Type: filter  Backspace: clear  ↑/↓/j/k/PgUp/PgDn: navigate  Enter: select  Ctrl+D: delete  Esc/q: cancel",
                 )
             );
             if let Some(message) = &picker.status_message {
@@ -1368,7 +1368,7 @@ impl PiApp {
             "  {}",
             self.styles
                 .muted_italic
-                .render("↑/↓/j/k: navigate  Enter: select  Esc/q: cancel")
+                .render("↑/↓/j/k/PgUp/PgDn: navigate  Enter: select  Esc/q: cancel")
         );
 
         output
@@ -1444,7 +1444,7 @@ impl PiApp {
             "  {}",
             self.styles
                 .muted_italic
-                .render("↑/↓/j/k: navigate  Enter: select  Esc/q: back")
+                .render("↑/↓/j/k/PgUp/PgDn: navigate  Enter: select  Esc/q: back")
         );
 
         output
@@ -1619,7 +1619,7 @@ impl PiApp {
             "\n  {}",
             self.styles
                 .muted_italic
-                .render("↑/↓/j/k: navigate  Enter: switch  Esc: cancel  * = current")
+                .render("↑/↓/j/k/PgUp/PgDn: navigate  Enter: switch  Esc: cancel  * = current")
         );
         output
     }

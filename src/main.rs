@@ -3641,22 +3641,25 @@ result in account suspension/ban. Prefer using an Anthropic API key (ANTHROPIC_A
                 );
             }
 
-            // Start a local callback server for localhost redirect URIs so
-            // the browser redirect is captured automatically (issue #22).
-            let callback_server = start
-                .redirect_uri
-                .as_deref()
-                .filter(|uri| pi::auth::redirect_uri_needs_callback_server(uri))
-                .and_then(|uri| match pi::auth::start_oauth_callback_server(uri) {
-                    Ok(server) => {
-                        tracing::info!(port = server.port, "OAuth callback server listening");
-                        Some(server)
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to start OAuth callback server: {e}");
-                        None
-                    }
-                });
+            // Use the pre-bound callback server when the provider already
+            // created one (e.g. Copilot/GitLab with random port).  Otherwise
+            // start a new one for localhost redirect URIs (issue #22).
+            let callback_server = start.callback_server.or_else(|| {
+                start
+                    .redirect_uri
+                    .as_deref()
+                    .filter(|uri| pi::auth::redirect_uri_needs_callback_server(uri))
+                    .and_then(|uri| match pi::auth::start_oauth_callback_server(uri) {
+                        Ok(server) => {
+                            tracing::info!(port = server.port, "OAuth callback server listening");
+                            Some(server)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to start OAuth callback server: {e}");
+                            None
+                        }
+                    })
+            });
 
             let has_callback = callback_server.is_some();
             if has_callback {

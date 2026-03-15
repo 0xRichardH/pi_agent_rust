@@ -1279,6 +1279,20 @@ impl PiApp {
             chrome += visible + 5; // title + blank + items + help + blank
         }
 
+        // Safety margin: when any overlay is active, add extra rows to absorb
+        // styling escape-sequence overhead and occasional line-wrap edge cases
+        // that can push content past the terminal bottom.
+        let any_overlay = self.session_picker.is_some()
+            || self.settings_ui.is_some()
+            || self.theme_picker.is_some()
+            || self.capability_prompt.is_some()
+            || self.extension_custom_overlay.is_some()
+            || self.branch_picker.is_some()
+            || self.model_selector.is_some();
+        if any_overlay {
+            chrome += 2;
+        }
+
         // Input area vs processing spinner.
         if self.editor_input_is_available() {
             // render_input: "\n  header\n" (2 rows) + input.height() rows.
@@ -1675,7 +1689,7 @@ pub async fn run_interactive(
         usage,
     ))
     .with_alt_screen()
-    .with_mouse_cell_motion()
+    .with_mouse_all_motion()
     .with_input_receiver(ui_rx)
     .run()?;
 
@@ -2473,6 +2487,8 @@ impl PiApp {
                 match key.key_type {
                     KeyType::Up => picker.select_prev(),
                     KeyType::Down => picker.select_next(),
+                    KeyType::PgUp => picker.select_page_up(),
+                    KeyType::PgDown => picker.select_page_down(),
                     KeyType::Runes if key.runes == ['k'] => picker.select_prev(),
                     KeyType::Runes if key.runes == ['j'] => picker.select_next(),
                     KeyType::Enter => {
@@ -2542,6 +2558,16 @@ impl PiApp {
                     }
                     KeyType::Down => {
                         settings_ui.select_next();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::PgUp => {
+                        settings_ui.select_page_up();
+                        self.settings_ui = Some(settings_ui);
+                        return None;
+                    }
+                    KeyType::PgDown => {
+                        settings_ui.select_page_down();
                         self.settings_ui = Some(settings_ui);
                         return None;
                     }
@@ -2648,6 +2674,14 @@ impl PiApp {
                     }
                     KeyType::Down => {
                         picker.select_next();
+                        return None;
+                    }
+                    KeyType::PgUp => {
+                        picker.select_page_up();
+                        return None;
+                    }
+                    KeyType::PgDown => {
+                        picker.select_page_down();
                         return None;
                     }
                     KeyType::Runes if key.runes == ['k'] && !picker.has_query() => {

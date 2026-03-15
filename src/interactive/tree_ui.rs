@@ -193,6 +193,8 @@ impl PiApp {
         match key.key_type {
             KeyType::Up => picker.select_prev(),
             KeyType::Down => picker.select_next(),
+            KeyType::PgUp => picker.select_page_up(),
+            KeyType::PgDown => picker.select_page_down(),
             KeyType::Runes if key.runes == ['k'] => picker.select_prev(),
             KeyType::Runes if key.runes == ['j'] => picker.select_next(),
             KeyType::Enter => {
