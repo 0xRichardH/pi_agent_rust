@@ -1336,7 +1336,7 @@ fn apply_custom_models(
                 if provider_cfg.api.is_some() {
                     entry.model.api.clone_from(&provider_api_string);
                 }
-                if provider_cfg.headers.is_some() {
+                if should_apply_headers_override(provider_cfg.headers.as_ref(), &provider_headers) {
                     entry.headers.clone_from(&provider_headers);
                 }
                 if provider_key.is_some() {
@@ -1521,6 +1521,13 @@ fn merge_headers(
         merged.insert(k, v);
     }
     merged
+}
+
+fn should_apply_headers_override(
+    configured_headers: Option<&HashMap<String, String>>,
+    resolved_headers: &HashMap<String, String>,
+) -> bool {
+    configured_headers.is_some_and(|headers| headers.is_empty() || !resolved_headers.is_empty())
 }
 
 fn resolve_headers(headers: Option<&HashMap<String, String>>) -> HashMap<String, String> {
@@ -2103,6 +2110,107 @@ mod tests {
                     .unwrap_or(false)
             );
         }
+    }
+
+    #[test]
+    fn apply_custom_models_preserves_existing_headers_when_provider_header_values_unresolved() {
+        let (dir, auth) = test_auth_storage();
+        let mut models = vec![ModelEntry {
+            model: Model {
+                id: "claude-test".to_string(),
+                name: "Claude Test".to_string(),
+                api: "anthropic-messages".to_string(),
+                provider: "anthropic".to_string(),
+                base_url: "https://api.anthropic.com/v1/messages".to_string(),
+                reasoning: false,
+                input: vec![InputType::Text],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 200_000,
+                max_tokens: 8_192,
+                headers: HashMap::new(),
+            },
+            api_key: None,
+            headers: HashMap::from([("x-built-in".to_string(), "keep-me".to_string())]),
+            auth_header: false,
+            compat: None,
+            oauth_config: None,
+        }];
+
+        let config = ModelsConfig {
+            providers: HashMap::from([(
+                "anthropic".to_string(),
+                ProviderConfig {
+                    headers: Some(HashMap::from([(
+                        "x-provider".to_string(),
+                        "file:missing-header.txt".to_string(),
+                    )])),
+                    ..ProviderConfig::default()
+                },
+            )]),
+        };
+
+        apply_custom_models(&auth, &mut models, &config, Some(dir.path()));
+
+        assert_eq!(
+            models[0].headers.get("x-built-in").map(String::as_str),
+            Some("keep-me")
+        );
+        assert!(
+            !models[0].headers.contains_key("x-provider"),
+            "unresolved provider header values should not inject empty overrides"
+        );
+    }
+
+    #[test]
+    fn apply_custom_models_empty_provider_header_map_clears_existing_headers() {
+        let (_dir, auth) = test_auth_storage();
+        let mut models = vec![ModelEntry {
+            model: Model {
+                id: "claude-test".to_string(),
+                name: "Claude Test".to_string(),
+                api: "anthropic-messages".to_string(),
+                provider: "anthropic".to_string(),
+                base_url: "https://api.anthropic.com/v1/messages".to_string(),
+                reasoning: false,
+                input: vec![InputType::Text],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 200_000,
+                max_tokens: 8_192,
+                headers: HashMap::new(),
+            },
+            api_key: None,
+            headers: HashMap::from([("x-built-in".to_string(), "remove-me".to_string())]),
+            auth_header: false,
+            compat: None,
+            oauth_config: None,
+        }];
+
+        let config = ModelsConfig {
+            providers: HashMap::from([(
+                "anthropic".to_string(),
+                ProviderConfig {
+                    headers: Some(HashMap::new()),
+                    ..ProviderConfig::default()
+                },
+            )]),
+        };
+
+        apply_custom_models(&auth, &mut models, &config, None);
+
+        assert!(
+            models[0].headers.is_empty(),
+            "an explicit empty header map should still clear inherited headers"
+        );
     }
 
     #[test]
