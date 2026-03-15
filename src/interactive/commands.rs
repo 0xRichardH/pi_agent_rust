@@ -948,10 +948,9 @@ impl PiApp {
                             base_url,
                             ..crate::auth::GitLabOAuthConfig::default()
                         };
-                        let gitlab_redirect_uri = redirect_uri.clone().or_else(|| match &config {
-                            Some(c) => c.redirect_uri.clone(),
-                            None => oauth_config.as_ref().and_then(|c| c.redirect_uri.clone()),
-                        });
+                        let gitlab_redirect_uri = redirect_uri
+                            .clone()
+                            .or_else(|| oauth_config.as_ref().and_then(|c| c.redirect_uri.clone()));
                         Box::pin(crate::auth::complete_gitlab_oauth(
                             &gitlab_config,
                             &code_input,
