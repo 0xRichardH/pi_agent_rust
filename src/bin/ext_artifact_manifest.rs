@@ -450,6 +450,14 @@ fn normalize_hosted_repo_reference(value: &str) -> Option<String> {
         ("ssh://git@github.com/", "https://github.com"),
         ("git://github.com/", "https://github.com"),
         ("github.com/", "https://github.com"),
+        ("git@gitlab.com:", "https://gitlab.com"),
+        ("ssh://git@gitlab.com/", "https://gitlab.com"),
+        ("git://gitlab.com/", "https://gitlab.com"),
+        ("gitlab.com/", "https://gitlab.com"),
+        ("git@bitbucket.org:", "https://bitbucket.org"),
+        ("ssh://git@bitbucket.org/", "https://bitbucket.org"),
+        ("git://bitbucket.org/", "https://bitbucket.org"),
+        ("bitbucket.org/", "https://bitbucket.org"),
     ] {
         if let Some(path) = value.strip_prefix(prefix) {
             return normalize_hosted_repo_path(base, path);
@@ -731,6 +739,42 @@ mod tests {
         match source {
             ProvenanceSource::Url { url } => {
                 assert_eq!(url, "https://github.com/w-winter/dot314");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_normalizes_gitlab_ssh_repository_object_to_https_url() {
+        let source = infer_source(
+            &third_party_ext("third-party/custom"),
+            &package_inventory_with_repository(serde_json::json!({
+                "type": "git",
+                "url": "git+ssh://git@gitlab.com/group/subgroup/repo.git"
+            })),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://gitlab.com/group/subgroup/repo");
+            }
+            other => panic!("expected Url source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infer_source_normalizes_bitbucket_scp_repository_object_to_https_url() {
+        let source = infer_source(
+            &third_party_ext("third-party/custom"),
+            &package_inventory_with_repository(serde_json::json!({
+                "type": "git",
+                "url": "git@bitbucket.org:workspace/repo.git"
+            })),
+        );
+
+        match source {
+            ProvenanceSource::Url { url } => {
+                assert_eq!(url, "https://bitbucket.org/workspace/repo");
             }
             other => panic!("expected Url source, got {other:?}"),
         }
