@@ -411,7 +411,7 @@ impl PiApp {
                 }
             };
             let temp_path = temp_file.into_temp_path();
-            if let Err(err) = std::fs::write(&temp_path, html.as_bytes()) {
+            if let Err(err) = asupersync::fs::write(&temp_path, html.as_bytes()).await {
                 let _ = crate::interactive::enqueue_pi_event(
                     &event_tx,
                     &asupersync::Cx::current().unwrap_or_else(asupersync::Cx::for_request),

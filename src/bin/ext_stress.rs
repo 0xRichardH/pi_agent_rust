@@ -266,10 +266,12 @@ async fn run(args: Args) -> Result<()> {
     });
 
     if let Some(parent) = report_path.parent() {
-        std::fs::create_dir_all(parent)
+        asupersync::fs::create_dir_all(parent)
+            .await
             .with_context(|| format!("create report directory {}", parent.display()))?;
     }
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)
+    asupersync::fs::write(&report_path, serde_json::to_string_pretty(&report)?)
+        .await
         .with_context(|| format!("write report {}", report_path.display()))?;
 
     println!(

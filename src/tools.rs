@@ -2233,7 +2233,22 @@ fn detect_line_ending(content: &str) -> &'static str {
 }
 
 fn normalize_to_lf(text: &str) -> String {
-    text.replace("\r\n", "\n").replace('\r', "\n")
+    if !text.contains('\r') {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            out.push('\n');
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn normalize_line_endings_chunk(chunk: &[u8], pending_cr: &mut bool) -> Vec<u8> {
@@ -3493,7 +3508,7 @@ impl Tool for GrepTool {
             let mut buf = Vec::new();
             let _ = stderr_tx.send(
                 reader
-                    .take(READ_TOOL_MAX_BYTES)
+                    .take(READ_TOOL_MAX_BYTES.saturating_add(1))
                     .read_to_end(&mut buf)
                     .map(|_| buf)
                     .map_err(|err| err.to_string()),
@@ -3604,7 +3619,10 @@ impl Tool for GrepTool {
         }
         drain_rg_stderr(&stderr_rx, &mut stderr_bytes)?;
 
-        let stderr_text = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+        let mut stderr_text = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+        if stderr_bytes.len() as u64 > READ_TOOL_MAX_BYTES {
+            stderr_text.push_str("\n... [stderr truncated] ...");
+        }
         if !match_scan_limit_reached && code != 0 && code != 1 {
             let msg = if stderr_text.is_empty() {
                 format!("ripgrep exited with code {code}")
@@ -3912,7 +3930,7 @@ impl Tool for FindTool {
         let stdout_handle = std::thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
             let mut buf = Vec::new();
             stdout_pipe
-                .take(READ_TOOL_MAX_BYTES)
+                .take(READ_TOOL_MAX_BYTES.saturating_add(1))
                 .read_to_end(&mut buf)
                 .map_err(|err| err.to_string())?;
             Ok(buf)
@@ -3921,7 +3939,7 @@ impl Tool for FindTool {
         let stderr_handle = std::thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
             let mut buf = Vec::new();
             stderr_pipe
-                .take(READ_TOOL_MAX_BYTES)
+                .take(READ_TOOL_MAX_BYTES.saturating_add(1))
                 .read_to_end(&mut buf)
                 .map_err(|err| err.to_string())?;
             Ok(buf)
@@ -3962,8 +3980,14 @@ impl Tool for FindTool {
             .map_err(|_| Error::tool("find", "fd stderr reader thread panicked"))?
             .map_err(|err| Error::tool("find", format!("Failed to read fd stderr: {err}")))?;
 
-        let stdout = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+        let mut stdout = String::from_utf8_lossy(&stdout_bytes).trim().to_string();
+        if stdout_bytes.len() as u64 > READ_TOOL_MAX_BYTES {
+            stdout.push_str("\n... [stdout truncated] ...");
+        }
+        let mut stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+        if stderr_bytes.len() as u64 > READ_TOOL_MAX_BYTES {
+            stderr.push_str("\n... [stderr truncated] ...");
+        }
 
         if !status.success() && stdout.is_empty() {
             let code = status.code().unwrap_or(1);

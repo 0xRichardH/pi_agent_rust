@@ -575,15 +575,21 @@ fn build_tree_selector_rows(
     }
 
     fn truncate_inline(text: &str, max: usize) -> String {
-        let normalized = text.replace('\n', " ");
-        if normalized.chars().count() <= max {
-            return normalized;
+        if max == 0 {
+            return String::new();
         }
-        normalized
-            .chars()
-            .take(max.saturating_sub(1))
-            .collect::<String>()
-            + "…"
+        let mut out = String::with_capacity(max);
+        let mut count = 0;
+        for c in text.chars() {
+            if count == max {
+                out.pop();
+                out.push('…');
+                return out;
+            }
+            out.push(if c == '\n' { ' ' } else { c });
+            count += 1;
+        }
+        out
     }
 
     fn describe_entry(entry: &SessionEntry) -> (String, Option<String>) {

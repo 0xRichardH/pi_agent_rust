@@ -8836,14 +8836,42 @@ function __wrapExecLike(commandForError, child, opts, callback) {
     }
   };
 
+  let stdoutLen = 0;
+  let stderrLen = 0;
+  let killedForMaxBuffer = false;
+
+  const checkMaxBuffer = (isStdout) => {
+    if (stdoutLen > opts.maxBuffer || stderrLen > opts.maxBuffer) {
+      if (!killedForMaxBuffer) {
+        killedForMaxBuffer = true;
+        child.kill("SIGTERM");
+        const out = stdoutChunks.join("");
+        const errOut = stderrChunks.join("");
+        const err = new Error(`${isStdout ? "stdout" : "stderr"} maxBuffer length exceeded`);
+        err.stdout = out.slice(0, opts.maxBuffer);
+        err.stderr = errOut.slice(0, opts.maxBuffer);
+        finish(err, err.stdout, err.stderr);
+      }
+    }
+  };
+
   child.stdout?.on("data", (chunk) => {
-    stdoutChunks.push(String(chunk ?? ""));
+    if (killedForMaxBuffer) return;
+    const str = String(chunk ?? "");
+    stdoutChunks.push(str);
+    stdoutLen += str.length;
+    checkMaxBuffer(true);
   });
   child.stderr?.on("data", (chunk) => {
-    stderrChunks.push(String(chunk ?? ""));
+    if (killedForMaxBuffer) return;
+    const str = String(chunk ?? "");
+    stderrChunks.push(str);
+    stderrLen += str.length;
+    checkMaxBuffer(false);
   });
 
   child.on("error", (error) => {
+    if (killedForMaxBuffer) return;
     finish(
       error instanceof Error ? error : new Error(String(error)),
       "",
@@ -8852,6 +8880,7 @@ function __wrapExecLike(commandForError, child, opts, callback) {
   });
 
   child.on("close", (code) => {
+    if (killedForMaxBuffer) return;
     let out = stdoutChunks.join("");
     let errOut = stderrChunks.join("");
 
@@ -9365,19 +9394,19 @@ const __pi_vfs = (() => {
     }
     const normalized = String(encoding).toLowerCase();
     if (normalized === "base64") {
-      let bin = "";
+      let binChunks = [];
       let chunk = [];
       for (let i = 0; i < bytes.length; i++) {
         chunk.push(bytes[i]);
         if (chunk.length >= 4096) {
-          bin += String.fromCharCode.apply(null, chunk);
+          binChunks.push(String.fromCharCode.apply(null, chunk));
           chunk.length = 0;
         }
       }
       if (chunk.length > 0) {
-        bin += String.fromCharCode.apply(null, chunk);
+        binChunks.push(String.fromCharCode.apply(null, chunk));
       }
-      return btoa(bin);
+      return btoa(binChunks.join(''));
     }
     return new TextDecoder().decode(bytes);
   }
@@ -14545,6 +14574,23 @@ impl<C: SchedulerClock + 'static> PiJsRuntime<C> {
                     ),
                 )?;
 
+                // __pi_base64_encode_bytes_native(Uint8Array) -> base64 string
+                global.set(
+                    "__pi_base64_encode_bytes_native",
+                    Func::from(
+                        move |_ctx: Ctx<'_>, input: rquickjs::TypedArray<'_, u8>| -> rquickjs::Result<String> {
+                            let bytes = input.as_bytes().ok_or_else(|| {
+                                rquickjs::Error::new_into_js_message(
+                                    "base64",
+                                    "encode",
+                                    "Detached TypedArray",
+                                )
+                            })?;
+                            Ok(BASE64_STANDARD.encode(bytes))
+                        },
+                    ),
+                )?;
+
                 // __pi_base64_decode_native(base64) -> binary string
                 global.set(
                     "__pi_base64_decode_native",
@@ -17635,19 +17681,22 @@ if (typeof globalThis.Buffer === 'undefined') {
             const view = this.subarray(s, e);
             const enc = String(encoding || 'utf8').toLowerCase();
             if (enc === 'base64') {
-                let binary = '';
+                if (typeof globalThis.__pi_base64_encode_bytes_native === 'function') {
+                    return __pi_base64_encode_bytes_native(view);
+                }
+                let binaryChunks = [];
                 let chunk = [];
                 for (let i = 0; i < view.length; i++) {
                     chunk.push(view[i]);
                     if (chunk.length >= 4096) {
-                        binary += String.fromCharCode.apply(null, chunk);
+                        binaryChunks.push(String.fromCharCode.apply(null, chunk));
                         chunk.length = 0;
                     }
                 }
                 if (chunk.length > 0) {
-                    binary += String.fromCharCode.apply(null, chunk);
+                    binaryChunks.push(String.fromCharCode.apply(null, chunk));
                 }
-                return __pi_base64_encode_native(binary);
+                return __pi_base64_encode_native(binaryChunks.join(''));
             }
             if (enc === 'hex') {
                 const hexArr = new Array(view.length);
@@ -18368,6 +18417,9 @@ if (typeof globalThis.fetch !== 'function') {
             bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
         }
         if (!bytes) return null;
+        if (typeof globalThis.__pi_base64_encode_bytes_native === 'function') {
+            return __pi_base64_encode_bytes_native(bytes);
+        }
         let binaryChunks = [];
         let chunk = [];
         for (let i = 0; i < bytes.length; i++) {

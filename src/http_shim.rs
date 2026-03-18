@@ -72,6 +72,11 @@ function __pi_http_chunks_to_base64(chunks) {
     offset += part.byteLength;
   }
 
+  if (typeof globalThis.__pi_base64_encode_bytes_native === 'function') {
+    return __pi_base64_encode_bytes_native(merged);
+  }
+
+  // Fallback for older runtime bounds
   let binary = '';
   let chunk = [];
   for (let i = 0; i < merged.length; i++) {
@@ -85,7 +90,7 @@ function __pi_http_chunks_to_base64(chunks) {
     binary += String.fromCharCode.apply(null, chunk);
   }
   return __pi_base64_encode_native(binary);
-  }
+}
 
 function __pi_http_decode_body_bytes(bodyBytes) {
   const encoded = String(bodyBytes ?? '');
