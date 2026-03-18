@@ -4851,10 +4851,15 @@ async fn get_file_lines_async<'a>(
 
         // Match Node's `readFileSync(..., "utf-8")` behavior: decode lossily rather than failing.
         let bytes = asupersync::fs::read(path).await.unwrap_or_default();
-        let content = String::from_utf8_lossy(&bytes).to_string();
-        let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
-        let mut lines: Vec<String> = normalized.split('\n').map(str::to_string).collect();
-        if normalized.ends_with('\n') {
+        let content = String::from_utf8_lossy(&bytes);
+        let mut lines = Vec::new();
+        for line in content.split('\n') {
+            let trimmed = line.strip_suffix('\r').unwrap_or(line);
+            for piece in trimmed.split('\r') {
+                lines.push(piece.to_string());
+            }
+        }
+        if content.ends_with('\n') && lines.last().is_some_and(|l| l.is_empty()) {
             lines.pop();
         }
         cache.insert(path.to_path_buf(), lines);

@@ -1100,7 +1100,7 @@ mod tests {
                 Vec::new(),
                 event_tx,
                 runtime_handle(),
-                true,
+                false,
                 None,
                 Some(KeyBindings::new()),
                 Vec::new(),

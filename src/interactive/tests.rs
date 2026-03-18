@@ -455,7 +455,7 @@ fn enqueue_pi_event_current_uses_ambient_context_under_backpressure() {
 }
 
 #[test]
-fn enqueue_pi_event_current_respects_ambient_context_cancellation() {
+fn enqueue_pi_event_current_ignores_ambient_context_cancellation() {
     asupersync::test_utils::run_test(|| async {
         use asupersync::channel::mpsc::RecvError;
         use asupersync::types::CancelKind;
@@ -469,20 +469,25 @@ fn enqueue_pi_event_current_respects_ambient_context_cancellation() {
         current_cx.cancel_with(CancelKind::User, Some("cancel stale UI send"));
         let _guard = Cx::set_current(Some(current_cx));
 
-        let enqueued =
-            enqueue_pi_event_current(&event_tx, PiMsg::System("stale".to_string())).await;
-        assert!(
-            !enqueued,
-            "cancelled ambient context must reject stale UI sends"
-        );
-
         let recv_cx = Cx::for_request();
-        let first = event_rx.recv(&recv_cx).await.expect("first queued message");
-        assert!(matches!(first, PiMsg::System(text) if text == "busy"));
+        let send_system = enqueue_pi_event_current(&event_tx, PiMsg::System("stale".to_string()));
+        let recv_messages = async {
+            let first = event_rx.recv(&recv_cx).await.expect("first queued message");
+            let second = event_rx
+                .recv(&recv_cx)
+                .await
+                .expect("second queued message");
+            (first, second)
+        };
+
+        let (enqueued, (first, second)) = futures::join!(send_system, recv_messages);
+
         assert!(
-            matches!(event_rx.try_recv(), Err(RecvError::Empty)),
-            "cancelled send should not enqueue a follow-on message"
+            enqueued,
+            "UI events must be delivered even if ambient context is cancelled"
         );
+        assert!(matches!(first, PiMsg::System(text) if text == "busy"));
+        assert!(matches!(second, PiMsg::System(text) if text == "stale"));
     });
 }
 
