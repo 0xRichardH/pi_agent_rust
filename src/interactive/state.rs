@@ -427,22 +427,18 @@ impl ThemePickerOverlay {
         items.push(ThemePickerItem::BuiltIn("dark"));
         items.push(ThemePickerItem::BuiltIn("light"));
         items.push(ThemePickerItem::BuiltIn("solarized"));
-        items.extend(
-            Theme::discover_themes(cwd)
-                .into_iter()
-                .map(|path| {
-                    let name = Theme::load(&path).map_or_else(
-                        |_| {
-                            path.file_stem().map_or_else(
-                                || "unknown".to_string(),
-                                |s| s.to_string_lossy().to_string(),
-                            )
-                        },
-                        |t| t.name,
-                    );
-                    ThemePickerItem::File { path, name }
-                }),
-        );
+        items.extend(Theme::discover_themes(cwd).into_iter().map(|path| {
+            let name = Theme::load(&path).map_or_else(
+                |_| {
+                    path.file_stem().map_or_else(
+                        || "unknown".to_string(),
+                        |s| s.to_string_lossy().to_string(),
+                    )
+                },
+                |t| t.name,
+            );
+            ThemePickerItem::File { path, name }
+        }));
         Self {
             items,
             selected: 0,

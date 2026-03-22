@@ -4,6 +4,7 @@ use crate::session::{SessionEntry, SessionHeader};
 use crate::session_metrics;
 use asupersync::Outcome;
 use asupersync::database::{SqliteConnection, SqliteError, SqliteRow, SqliteValue};
+use std::fmt::Write as _;
 use std::path::Path;
 
 const INIT_SQL: &str = r"
@@ -641,15 +642,17 @@ pub async fn save_session(
         .await,
     )?;
 
-    let mut seq = 1;
+    let mut seq = 1_i64;
     for chunk in entry_jsons.chunks(200) {
         let mut sql = String::with_capacity(64 + chunk.len() * 16);
         sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
         let mut params = Vec::with_capacity(chunk.len() * 2);
         for (i, json) in chunk.iter().enumerate() {
-            if i > 0 { sql.push(','); }
-            sql.push_str(&format!("(?{},?{})", i * 2 + 1, i * 2 + 2));
-            params.push(SqliteValue::Integer(i64::try_from(seq).unwrap_or(i64::MAX)));
+            if i > 0 {
+                sql.push(',');
+            }
+            let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
+            params.push(SqliteValue::Integer(seq));
             params.push(SqliteValue::Text(json.clone()));
             seq += 1;
         }
@@ -723,15 +726,19 @@ pub async fn append_entries(
     serialize_timer.finish();
     metrics.record_bytes(&metrics.sqlite_bytes, total_json_bytes);
 
-    let mut seq = start_seq + 1;
+    let mut seq = i64::try_from(start_seq)
+        .unwrap_or(i64::MAX.saturating_sub(1))
+        .saturating_add(1);
     for chunk in entry_jsons.chunks(200) {
         let mut sql = String::with_capacity(64 + chunk.len() * 16);
         sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
         let mut params = Vec::with_capacity(chunk.len() * 2);
         for (i, json) in chunk.iter().enumerate() {
-            if i > 0 { sql.push(','); }
-            sql.push_str(&format!("(?{},?{})", i * 2 + 1, i * 2 + 2));
-            params.push(SqliteValue::Integer(i64::try_from(seq).unwrap_or(i64::MAX)));
+            if i > 0 {
+                sql.push(',');
+            }
+            let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
+            params.push(SqliteValue::Integer(seq));
             params.push(SqliteValue::Text(json.clone()));
             seq += 1;
         }

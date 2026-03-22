@@ -2183,7 +2183,10 @@ mod tests {
 
         assert!(!result.has_warnings());
         assert!(result.bindings.get_bindings(AppAction::CursorUp).is_empty());
-        assert_ne!(result.bindings.lookup(&KeyBinding::plain("up")), Some(AppAction::CursorUp));
+        assert_ne!(
+            result.bindings.lookup(&KeyBinding::plain("up")),
+            Some(AppAction::CursorUp)
+        );
 
         let down_bindings = result.bindings.get_bindings(AppAction::CursorDown);
         assert_eq!(down_bindings, &[KeyBinding::plain("down")]);

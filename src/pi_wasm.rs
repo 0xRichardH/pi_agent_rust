@@ -479,7 +479,8 @@ fn register_host_imports(
                                             set_i32_result(results, -ERRNO_NOENT);
                                             return Ok(());
                                         }
-                                        host.staged_files.insert(path.clone(), std::sync::Arc::new(Vec::new()));
+                                        host.staged_files
+                                            .insert(path.clone(), std::sync::Arc::new(Vec::new()));
                                     } else if flags & O_CREAT != 0 && flags & O_EXCL != 0 {
                                         set_i32_result(results, -ERRNO_EXIST);
                                         return Ok(());
@@ -636,11 +637,8 @@ fn register_host_imports(
                                         set_i32_result(results, ERRNO_BADF);
                                         return Ok(());
                                     };
-                                let Some(file_len) = caller
-                                    .data()
-                                    .staged_files
-                                    .get(&path)
-                                    .map(|v| v.len())
+                                let Some(file_len) =
+                                    caller.data().staged_files.get(&path).map(|v| v.len())
                                 else {
                                     set_i32_result(results, ERRNO_NOENT);
                                     return Ok(());
@@ -726,10 +724,8 @@ fn register_host_imports(
                                             set_i32_result(results, ERRNO_BADF);
                                             return Ok(());
                                         }
-                                        let Some(file_len) = host
-                                            .staged_files
-                                            .get(&handle.path)
-                                            .map(|v| v.len())
+                                        let Some(file_len) =
+                                            host.staged_files.get(&handle.path).map(|v| v.len())
                                         else {
                                             set_i32_result(results, ERRNO_NOENT);
                                             return Ok(());
@@ -991,7 +987,9 @@ pub(crate) fn inject_wasm_globals(
                     }
                     let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
                     debug!(path = %path, len_bytes = bytes.len(), "wasm: staged file");
-                    st.borrow_mut().staged_files.insert(path, std::sync::Arc::new(bytes));
+                    st.borrow_mut()
+                        .staged_files
+                        .insert(path, std::sync::Arc::new(bytes));
                     Ok(len)
                 },
             ),

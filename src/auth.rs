@@ -776,7 +776,10 @@ fn resolve_api_key_source(raw: &str) -> std::result::Result<Option<String>, Stri
 }
 
 /// Testable version of [`resolve_api_key_source`] with injectable env lookup.
-fn resolve_api_key_source_with_env<F>(raw: &str, env_lookup: F) -> std::result::Result<Option<String>, String>
+fn resolve_api_key_source_with_env<F>(
+    raw: &str,
+    env_lookup: F,
+) -> std::result::Result<Option<String>, String>
 where
     F: FnOnce(&str) -> Option<String>,
 {
@@ -7946,8 +7949,7 @@ mod tests {
 
     #[test]
     fn test_resolve_api_key_source_env_var_whitespace_only_returns_none() {
-        let result =
-            resolve_api_key_source_with_env("$ENV:WS_ONLY", |_| Some("   ".to_string()));
+        let result = resolve_api_key_source_with_env("$ENV:WS_ONLY", |_| Some("   ".to_string()));
         assert_eq!(result.unwrap(), None);
     }
 
@@ -8059,8 +8061,7 @@ mod tests {
 
         // Without the env var set, stored key should resolve to None, then fall
         // through the resolution chain.
-        let resolved_without_env =
-            auth.resolve_api_key_with_env_lookup("openai", None, |_| None);
+        let resolved_without_env = auth.resolve_api_key_with_env_lookup("openai", None, |_| None);
         assert!(
             resolved_without_env.is_none(),
             "env-backed key with unset var and no env fallback should resolve to None"

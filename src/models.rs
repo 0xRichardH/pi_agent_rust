@@ -421,6 +421,18 @@ pub fn model_autocomplete_candidates() -> &'static [ModelAutocompleteCandidate] 
                 slug: "openai-codex/gpt-5.4".to_string(),
                 description: Some("GPT-5.4 Codex".to_string()),
             });
+            candidates.push(ModelAutocompleteCandidate {
+                slug: "openai-codex/gpt-5.2-codex".to_string(),
+                description: Some("GPT-5.2 Codex".to_string()),
+            });
+            candidates.push(ModelAutocompleteCandidate {
+                slug: "google-gemini-cli/gemini-2.5-pro".to_string(),
+                description: Some("Gemini 2.5 Pro (CLI)".to_string()),
+            });
+            candidates.push(ModelAutocompleteCandidate {
+                slug: "google-antigravity/gemini-3-flash".to_string(),
+                description: Some("Gemini 3 Flash (Antigravity)".to_string()),
+            });
             candidates.sort_by_key(|candidate| candidate.slug.to_ascii_lowercase());
             candidates.dedup_by(|a, b| a.slug.eq_ignore_ascii_case(&b.slug));
             candidates
@@ -637,7 +649,25 @@ fn is_canonical_provider_for_model(model_id: &str, provider: &str) -> bool {
 /// This prevents non-reasoning models like `gpt-4o` from inheriting a
 /// provider-level `reasoning: true` flag from their provider (Issue #19).
 fn model_is_reasoning(model_id: &str) -> Option<bool> {
-    let id = model_id.to_ascii_lowercase();
+    let raw_id = model_id.to_ascii_lowercase();
+    let id = [
+        "claude-",
+        "gpt-",
+        "gemini-",
+        "command-",
+        "deepseek",
+        "qwq-",
+        "mistral",
+        "codestral",
+        "pixtral",
+        "llama",
+        "o1",
+        "o3",
+        "o4",
+    ]
+    .iter()
+    .find_map(|needle| raw_id.find(needle).map(|idx| &raw_id[idx..]))
+    .unwrap_or(raw_id.as_str());
 
     // OpenAI: o1/o3/o4 series and gpt-5.x are reasoning.
     // All gpt-4 variants (gpt-4o, gpt-4-turbo, gpt-4-0613, etc.) and gpt-3.5 are NOT.
@@ -1183,6 +1213,51 @@ fn built_in_models(auth: &AuthStorage, mode: ModelRegistryLoadMode) -> Vec<Model
         });
     }
 
+    if !models
+        .iter()
+        .any(|entry| entry.model.provider == "openai-codex" && entry.model.id == "gpt-5.2-codex")
+    {
+        models.push(ModelEntry {
+            model: Model {
+                id: "gpt-5.2-codex".to_string(),
+                name: "GPT-5.2 Codex".to_string(),
+                api: if mode == ModelRegistryLoadMode::Full {
+                    Api::OpenAICodexResponses.to_string()
+                } else {
+                    "openai-codex-responses".to_string()
+                },
+                provider: "openai-codex".to_string(),
+                base_url: if mode == ModelRegistryLoadMode::Full {
+                    "https://chatgpt.com/backend-api".to_string()
+                } else {
+                    String::new()
+                },
+                reasoning: true,
+                input: vec![InputType::Text, InputType::Image],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 272_000,
+                max_tokens: 128_000,
+                headers: HashMap::new(),
+            },
+            api_key: resolve_provider_api_key_cached(
+                auth,
+                "openai-codex",
+                "openai-codex",
+                &mut canonical_api_key_cache,
+                &mut provider_api_key_cache,
+            ),
+            headers: HashMap::new(),
+            auth_header: true,
+            compat: None,
+            oauth_config: None,
+        });
+    }
+
     // Keep the prior Codex default available until the bundled legacy catalog catches up.
     if !models
         .iter()
@@ -1264,6 +1339,86 @@ fn built_in_models(auth: &AuthStorage, mode: ModelRegistryLoadMode) -> Vec<Model
                 auth,
                 "openai-codex",
                 "openai-codex",
+                &mut canonical_api_key_cache,
+                &mut provider_api_key_cache,
+            ),
+            headers: HashMap::new(),
+            auth_header: true,
+            compat: None,
+            oauth_config: None,
+        });
+    }
+
+    if !models.iter().any(|entry| {
+        entry.model.provider == "google-gemini-cli" && entry.model.id == "gemini-2.5-pro"
+    }) {
+        models.push(ModelEntry {
+            model: Model {
+                id: "gemini-2.5-pro".to_string(),
+                name: "Gemini 2.5 Pro".to_string(),
+                api: "google-gemini-cli".to_string(),
+                provider: "google-gemini-cli".to_string(),
+                base_url: if mode == ModelRegistryLoadMode::Full {
+                    GOOGLE_GEMINI_CLI_API_URL.to_string()
+                } else {
+                    String::new()
+                },
+                reasoning: true,
+                input: vec![InputType::Text, InputType::Image],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 128_000,
+                max_tokens: 8192,
+                headers: HashMap::new(),
+            },
+            api_key: resolve_provider_api_key_cached(
+                auth,
+                "google",
+                "google-gemini-cli",
+                &mut canonical_api_key_cache,
+                &mut provider_api_key_cache,
+            ),
+            headers: HashMap::new(),
+            auth_header: true,
+            compat: None,
+            oauth_config: None,
+        });
+    }
+
+    if !models.iter().any(|entry| {
+        entry.model.provider == "google-antigravity" && entry.model.id == "gemini-3-flash"
+    }) {
+        models.push(ModelEntry {
+            model: Model {
+                id: "gemini-3-flash".to_string(),
+                name: "Gemini 3 Flash".to_string(),
+                api: "google-gemini-cli".to_string(),
+                provider: "google-antigravity".to_string(),
+                base_url: if mode == ModelRegistryLoadMode::Full {
+                    GOOGLE_ANTIGRAVITY_API_URL.to_string()
+                } else {
+                    String::new()
+                },
+                reasoning: true,
+                input: vec![InputType::Text, InputType::Image],
+                cost: ModelCost {
+                    input: 0.0,
+                    output: 0.0,
+                    cache_read: 0.0,
+                    cache_write: 0.0,
+                },
+                context_window: 128_000,
+                max_tokens: 8192,
+                headers: HashMap::new(),
+            },
+            api_key: resolve_provider_api_key_cached(
+                auth,
+                "google",
+                "google-antigravity",
                 &mut canonical_api_key_cache,
                 &mut provider_api_key_cache,
             ),
@@ -1846,6 +2001,13 @@ mod tests {
     #[test]
     fn parse_legacy_generated_models_extracts_known_legacy_only_providers() {
         let parsed = parse_legacy_generated_models();
+        if LEGACY_MODELS_GENERATED_TS.contains("export const MODELS = {} as const;") {
+            assert!(
+                parsed.is_empty(),
+                "published stub catalog should not parse into legacy entries"
+            );
+            return;
+        }
         assert!(
             !parsed.is_empty(),
             "legacy generated model catalog should parse into entries"

@@ -4076,35 +4076,36 @@ async fn ingest_bash_rpc_chunk(
 
         // Secure synchronous creation
         let path_clone = path.clone();
-        let expected_inode: Option<u64> = asupersync::runtime::spawn_blocking_io(move || -> std::io::Result<Option<u64>> {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
+        let expected_inode: Option<u64> =
+            asupersync::runtime::spawn_blocking_io(move || -> std::io::Result<Option<u64>> {
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
 
-            match options.open(&path_clone) {
-                Ok(file) => {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::MetadataExt;
-                        Ok(file.metadata().ok().map(|m| m.ino()))
+                match options.open(&path_clone) {
+                    Ok(file) => {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            Ok(file.metadata().ok().map(|m| m.ino()))
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            Ok(None)
+                        }
                     }
-                    #[cfg(not(unix))]
-                    {
+                    Err(e) => {
+                        tracing::warn!("Failed to create bash temp file: {e}");
                         Ok(None)
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Failed to create bash temp file: {e}");
-                    Ok(None)
-                }
-            }
-        })
-        .await
-        .unwrap_or(None);
+            })
+            .await
+            .unwrap_or(None);
 
         if expected_inode.is_some() || !cfg!(unix) {
             // Re-open async for writing

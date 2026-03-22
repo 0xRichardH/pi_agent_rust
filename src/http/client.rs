@@ -439,7 +439,9 @@ impl Response {
                         std::time::Duration::from_nanos(asupersync_now.duration_since(start_time));
                     if elapsed >= timeout {
                         return Some((
-                            Err(std::io::Error::other("Request timed out reading body stream")),
+                            Err(std::io::Error::other(
+                                "Request timed out reading body stream",
+                            )),
                             (stream, start_time, timeout),
                         ));
                     }
@@ -453,7 +455,9 @@ impl Response {
                         Either::Left((Some(res), _)) => Some((res, (stream, start_time, timeout))),
                         Either::Left((None, _)) => None,
                         Either::Right(_) => Some((
-                            Err(std::io::Error::other("Request timed out reading body stream")),
+                            Err(std::io::Error::other(
+                                "Request timed out reading body stream",
+                            )),
                             (stream, start_time, timeout),
                         )),
                     }

@@ -22636,16 +22636,22 @@ async fn dispatch_hostcall_exec_ref(
 
             let stdout_handle = thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
                 let mut buf = Vec::new();
-                std::io::Read::take(&mut stdout, crate::tools::READ_TOOL_MAX_BYTES.saturating_add(1))
-                    .read_to_end(&mut buf)
-                    .map_err(|err| err.to_string())?;
+                std::io::Read::take(
+                    &mut stdout,
+                    crate::tools::READ_TOOL_MAX_BYTES.saturating_add(1),
+                )
+                .read_to_end(&mut buf)
+                .map_err(|err| err.to_string())?;
                 Ok(buf)
             });
             let stderr_handle = thread::spawn(move || -> std::result::Result<Vec<u8>, String> {
                 let mut buf = Vec::new();
-                std::io::Read::take(&mut stderr, crate::tools::READ_TOOL_MAX_BYTES.saturating_add(1))
-                    .read_to_end(&mut buf)
-                    .map_err(|err| err.to_string())?;
+                std::io::Read::take(
+                    &mut stderr,
+                    crate::tools::READ_TOOL_MAX_BYTES.saturating_add(1),
+                )
+                .read_to_end(&mut buf)
+                .map_err(|err| err.to_string())?;
                 Ok(buf)
             });
 
