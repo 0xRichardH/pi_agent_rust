@@ -1,10 +1,10 @@
 //! Model registry: built-in + models.json overrides.
 
-use crate::auth::{AuthStorage, SapResolvedCredentials, resolve_sap_credentials};
+use crate::auth::{resolve_sap_credentials, AuthStorage, SapResolvedCredentials};
 use crate::error::Error;
 use crate::provider::{Api, InputType, Model, ModelCost};
 use crate::provider_metadata::{
-    ProviderRoutingDefaults, canonical_provider_id, provider_routing_defaults,
+    canonical_provider_id, provider_routing_defaults, ProviderRoutingDefaults,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -167,8 +167,7 @@ struct LegacyGeneratedModel {
     compat: Option<CompatConfig>,
 }
 
-const LEGACY_MODELS_GENERATED_TS: &str =
-    include_str!("../legacy_pi_mono_code/pi-mono/packages/ai/src/models.generated.ts");
+const LEGACY_MODELS_GENERATED_TS: &str = include_str!("../docs/models-generated.ts");
 const UPSTREAM_PROVIDER_MODEL_IDS_JSON: &str =
     include_str!("../docs/provider-upstream-model-ids-snapshot.json");
 const CODEX_RESPONSES_API_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
@@ -2013,11 +2012,9 @@ mod tests {
             "legacy generated model catalog should parse into entries"
         );
 
-        assert!(
-            parsed
-                .iter()
-                .any(|m| m.provider == "azure-openai-responses")
-        );
+        assert!(parsed
+            .iter()
+            .any(|m| m.provider == "azure-openai-responses"));
         assert!(parsed.iter().any(|m| m.provider == "vercel-ai-gateway"));
         assert!(parsed.iter().any(|m| m.provider == "kimi-coding"));
     }
@@ -2110,31 +2107,21 @@ mod tests {
         let (_dir, auth) = test_auth_storage();
         let models = built_in_models(&auth, ModelRegistryLoadMode::Full);
 
-        assert!(
-            models.iter().any(
-                |m| m.model.provider == "anthropic" && m.model.id == "claude-sonnet-4-20250514"
-            )
-        );
-        assert!(
-            models
-                .iter()
-                .any(|m| m.model.provider == "openai" && m.model.id == "gpt-4o")
-        );
-        assert!(
-            models
-                .iter()
-                .any(|m| m.model.provider == "openai" && m.model.id == "gpt-5.4")
-        );
-        assert!(
-            models
-                .iter()
-                .any(|m| m.model.provider == "google" && m.model.id == "gemini-2.5-pro")
-        );
-        assert!(
-            models
-                .iter()
-                .any(|m| m.model.provider == "openrouter" && m.model.id == "openrouter/auto")
-        );
+        assert!(models
+            .iter()
+            .any(|m| m.model.provider == "anthropic" && m.model.id == "claude-sonnet-4-20250514"));
+        assert!(models
+            .iter()
+            .any(|m| m.model.provider == "openai" && m.model.id == "gpt-4o"));
+        assert!(models
+            .iter()
+            .any(|m| m.model.provider == "openai" && m.model.id == "gpt-5.4"));
+        assert!(models
+            .iter()
+            .any(|m| m.model.provider == "google" && m.model.id == "gemini-2.5-pro"));
+        assert!(models
+            .iter()
+            .any(|m| m.model.provider == "openrouter" && m.model.id == "openrouter/auto"));
 
         let anthropic = models
             .iter()
@@ -2190,16 +2177,12 @@ mod tests {
         let (_dir, auth) = test_auth_storage();
         let models = built_in_models(&auth, ModelRegistryLoadMode::Full);
 
-        assert!(
-            models
-                .iter()
-                .any(|m| { m.model.provider == "groq" && m.model.id == "llama-3.3-70b-versatile" })
-        );
-        assert!(
-            models
-                .iter()
-                .any(|m| { m.model.provider == "zhipuai" && m.model.id == "glm-4.6" })
-        );
+        assert!(models
+            .iter()
+            .any(|m| { m.model.provider == "groq" && m.model.id == "llama-3.3-70b-versatile" }));
+        assert!(models
+            .iter()
+            .any(|m| { m.model.provider == "zhipuai" && m.model.id == "glm-4.6" }));
         assert!(models.iter().any(|m| {
             m.model.provider == "openrouter" && m.model.id == "anthropic/claude-sonnet-4"
         }));
@@ -2221,41 +2204,27 @@ mod tests {
     #[test]
     fn autocomplete_candidates_include_legacy_and_latest_entries() {
         let candidates = model_autocomplete_candidates();
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "openai-codex/gpt-5.4")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "openai-codex/gpt-5.2-codex")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "google-gemini-cli/gemini-2.5-pro")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "openai/gpt-5.4")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "anthropic/claude-opus-4-5")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "groq/llama-3.3-70b-versatile")
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|candidate| candidate.slug == "openrouter/anthropic/claude-sonnet-4.6")
-        );
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "openai-codex/gpt-5.4"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "openai-codex/gpt-5.2-codex"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "google-gemini-cli/gemini-2.5-pro"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "openai/gpt-5.4"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "anthropic/claude-opus-4-5"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "groq/llama-3.3-70b-versatile"));
+        assert!(candidates
+            .iter()
+            .any(|candidate| candidate.slug == "openrouter/anthropic/claude-sonnet-4.6"));
     }
 
     #[test]
@@ -2309,13 +2278,11 @@ mod tests {
                 Some("provider-header")
             );
             assert!(entry.auth_header);
-            assert!(
-                entry
-                    .compat
-                    .as_ref()
-                    .and_then(|c| c.supports_store)
-                    .unwrap_or(false)
-            );
+            assert!(entry
+                .compat
+                .as_ref()
+                .and_then(|c| c.supports_store)
+                .unwrap_or(false));
         }
     }
 
@@ -2863,16 +2830,12 @@ mod tests {
             .filter(|entry| entry.model.provider == "openrouter")
             .collect();
         assert_eq!(openrouter_models.len(), 2);
-        assert!(
-            openrouter_models
-                .iter()
-                .any(|entry| entry.model.id == "openai/gpt-4o-mini")
-        );
-        assert!(
-            openrouter_models
-                .iter()
-                .any(|entry| entry.model.id == "openrouter/auto")
-        );
+        assert!(openrouter_models
+            .iter()
+            .any(|entry| entry.model.id == "openai/gpt-4o-mini"));
+        assert!(openrouter_models
+            .iter()
+            .any(|entry| entry.model.id == "openrouter/auto"));
     }
 
     #[test]
@@ -3893,16 +3856,12 @@ mod tests {
             .filter(|m| m.model.provider == "google")
             .collect();
         assert_eq!(google_after.len(), google_before);
-        assert!(
-            google_after
-                .iter()
-                .all(|m| m.model.base_url == "https://proxy.example/v1")
-        );
-        assert!(
-            google_after
-                .iter()
-                .all(|m| m.model.api == "google-generative-ai")
-        );
+        assert!(google_after
+            .iter()
+            .all(|m| m.model.base_url == "https://proxy.example/v1"));
+        assert!(google_after
+            .iter()
+            .all(|m| m.model.api == "google-generative-ai"));
         assert!(google_after.iter().all(|m| m.auth_header));
     }
 
