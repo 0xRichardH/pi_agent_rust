@@ -459,7 +459,7 @@ pub struct Cli {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, ROOT_SUBCOMMANDS, parse_with_extension_flags};
+    use super::{parse_with_extension_flags, Cli, Commands, ROOT_SUBCOMMANDS};
     use clap::{CommandFactory, Parser};
 
     // ── 1. Basic flag parsing ────────────────────────────────────────
@@ -1253,7 +1253,6 @@ mod tests {
 
     // ── 14. CLI parity: every TS flag is parseable ──────────────────
     //
-    // Reference: legacy_pi_mono_code/.../cli/args.ts
     // This test validates that all flags from the TypeScript CLI are
     // accepted by the Rust CLI parser (DROPIN-141 / bd-3meug).
 
@@ -1385,8 +1384,9 @@ mod tests {
 
     mod proptest_cli {
         use crate::cli::{
-            ExtensionCliFlag, ROOT_SUBCOMMANDS, is_known_short_flag, is_negative_numeric_token,
-            known_long_option, preprocess_extension_flags, short_flag_expects_value,
+            is_known_short_flag, is_negative_numeric_token, known_long_option,
+            preprocess_extension_flags, short_flag_expects_value, ExtensionCliFlag,
+            ROOT_SUBCOMMANDS,
         };
         use proptest::prelude::*;
 

@@ -167,7 +167,6 @@ image-resize = ["image"]
 clipboard = ["dep:arboard"]
 wasm-host = ["dep:wasmtime"]
 sqlite-sessions = []
-ext-conformance = []
 fuzzing = []
 jemalloc = ["tikv-jemallocator"]
 

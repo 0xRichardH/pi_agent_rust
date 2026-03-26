@@ -1824,29 +1824,6 @@ pi.exec("echo hello");
     }
 
     #[test]
-    fn compatibility_scanner_keeps_late_requires_in_minified_lines() {
-        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let sample =
-            repo_root.join("tests/ext_conformance/artifacts/doom-overlay/doom/build/doom.js");
-        let sample_content = fs::read_to_string(&sample).expect("read minified sample bundle");
-
-        let temp = tempfile::tempdir().expect("tempdir");
-        let entry = temp.path().join("bundle.js");
-        fs::write(&entry, sample_content).expect("write bundle sample");
-
-        let scanner = CompatibilityScanner::new(temp.path().to_path_buf());
-        let ledger = scanner.scan_path(&entry).expect("scan");
-
-        assert!(
-            ledger
-                .capabilities
-                .iter()
-                .any(|cap| cap.capability == "exec" && cap.reason == "import:child_process"),
-            "minified bundle should still infer exec capability from child_process require"
-        );
-    }
-
-    #[test]
     fn compatibility_scanner_single_file_preserves_filename_in_evidence() {
         let temp = tempfile::tempdir().expect("tempdir");
         let entry = temp.path().join("single-file.js");
@@ -28857,8 +28834,7 @@ fn parse_truthy_flag(value: &str) -> bool {
 }
 
 fn compat_static_registration_enabled() -> bool {
-    cfg!(feature = "ext-conformance")
-        || std::env::var("PI_EXT_COMPAT_SCAN").is_ok_and(|value| parse_truthy_flag(&value))
+    std::env::var("PI_EXT_COMPAT_SCAN").is_ok_and(|value| parse_truthy_flag(&value))
 }
 
 fn register_command_literal_regex() -> &'static Regex {

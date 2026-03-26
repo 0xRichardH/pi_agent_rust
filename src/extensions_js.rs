@@ -125,8 +125,7 @@ fn parse_truthy_flag(value: &str) -> bool {
 }
 
 fn is_global_compat_scan_mode() -> bool {
-    cfg!(feature = "ext-conformance")
-        || std::env::var("PI_EXT_COMPAT_SCAN").is_ok_and(|value| parse_truthy_flag(&value))
+    std::env::var("PI_EXT_COMPAT_SCAN").is_ok_and(|value| parse_truthy_flag(&value))
 }
 
 fn is_compat_scan_mode(env: &HashMap<String, String>) -> bool {
@@ -20192,100 +20191,6 @@ export const bundled = globalThis.__doomWadFinderProbe.bundled;
                 bundled.ends_with("/doom1.wad"),
                 "unexpected doom wad probe: {probe}"
             );
-        });
-    }
-
-    #[test]
-    fn pijs_dynamic_import_loads_real_doom_wad_finder_module() {
-        futures::executor::block_on(async {
-            let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let ext_dir = repo_root.join("tests/ext_conformance/artifacts/doom-overlay");
-            let entry = ext_dir.join("wad-finder.ts");
-            assert!(entry.is_file(), "missing doom wad-finder at {entry:?}");
-
-            let config = PiJsRuntimeConfig {
-                repair_mode: RepairMode::AutoStrict,
-                ..PiJsRuntimeConfig::default()
-            };
-            let runtime = PiJsRuntime::with_clock_and_config_with_policy(
-                DeterministicClock::new(0),
-                config,
-                None,
-            )
-            .await
-            .expect("create runtime");
-            runtime.add_extension_root_with_id(ext_dir.clone(), Some("community/doom-overlay"));
-
-            let entry_spec = format!("file://{}", entry.display());
-            let script = format!(
-                r#"
-                globalThis.realDoomWadFinderImport = {{}};
-                import({entry_spec:?})
-                  .then((mod) => {{
-                    globalThis.realDoomWadFinderImport.done = true;
-                    globalThis.realDoomWadFinderImport.error = "";
-                    globalThis.realDoomWadFinderImport.exportType = typeof mod.findWadFile;
-                  }})
-                  .catch((err) => {{
-                    globalThis.realDoomWadFinderImport.done = true;
-                    globalThis.realDoomWadFinderImport.error = String((err && err.message) || err || "");
-                  }});
-                "#
-            );
-            runtime.eval(&script).await.expect("eval import");
-
-            let result = get_global_json(&runtime, "realDoomWadFinderImport").await;
-            assert_eq!(result["done"], serde_json::json!(true));
-            assert_eq!(result["error"], serde_json::json!(""));
-            assert_eq!(result["exportType"], serde_json::json!("function"));
-        });
-    }
-
-    #[test]
-    fn pijs_loads_real_doom_extension_entry() {
-        futures::executor::block_on(async {
-            let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            let ext_dir = repo_root.join("tests/ext_conformance/artifacts/doom-overlay");
-            let entry = ext_dir.join("index.ts");
-            assert!(entry.is_file(), "missing doom entry at {entry:?}");
-
-            let config = PiJsRuntimeConfig {
-                repair_mode: RepairMode::AutoStrict,
-                ..PiJsRuntimeConfig::default()
-            };
-            let runtime = PiJsRuntime::with_clock_and_config_with_policy(
-                DeterministicClock::new(0),
-                config,
-                None,
-            )
-            .await
-            .expect("create runtime");
-            runtime.add_extension_root_with_id(ext_dir.clone(), Some("community/doom-overlay"));
-
-            let entry_spec = format!("file://{}", entry.display());
-            let script = format!(
-                r#"
-                globalThis.realDoomEntryLoad = {{}};
-                __pi_load_extension("community/doom-overlay", {entry_spec:?}, {{ name: "doom-overlay" }})
-                  .then(() => {{
-                    globalThis.realDoomEntryLoad.done = true;
-                    globalThis.realDoomEntryLoad.error = "";
-                  }})
-                  .catch((err) => {{
-                    globalThis.realDoomEntryLoad.done = true;
-                    globalThis.realDoomEntryLoad.error = String((err && err.message) || err || "");
-                  }});
-                "#
-            );
-            runtime.eval(&script).await.expect("eval load_extension");
-
-            let result = get_global_json(&runtime, "realDoomEntryLoad").await;
-            assert_eq!(result["done"], serde_json::json!(true));
-            assert_eq!(result["error"], serde_json::json!(""));
-
-            let snapshot = call_global_fn_json(&runtime, "__pi_runtime_registry_snapshot").await;
-            assert_eq!(snapshot["extensions"], serde_json::json!(1));
-            assert_eq!(snapshot["commands"], serde_json::json!(1));
         });
     }
 

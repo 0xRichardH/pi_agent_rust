@@ -1,3 +1,0 @@
-{
-  "features": ["git-status", "grep", "glob", "replace-all", "ast"]
-}

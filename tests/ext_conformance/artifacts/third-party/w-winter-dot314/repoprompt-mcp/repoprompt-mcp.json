@@ -1,9 +1,0 @@
-{
-  "command": "/Applications/Repo Prompt.app/Contents/MacOS/repoprompt-mcp",
-  "args": [],
-  "autoBindOnStart": true,
-  "persistBinding": true,
-  "confirmDeletes": true,
-  "confirmEdits": false,
-  "collapsedMaxLines": 15
-}
