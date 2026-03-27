@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::extensions::strip_unc_prefix;
 use crate::model::{ContentBlock, ImageContent, TextContent};
+use crate::platform::NamedTempFileExt;
 use asupersync::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf, SeekFrom};
 use asupersync::time::{sleep, wall_now};
 use async_trait::async_trait;
@@ -3016,7 +3017,7 @@ impl Tool for EditTool {
             }
 
             temp_file
-                .persist(&absolute_path_clone)
+                .persist_with_retry(&absolute_path_clone)
                 .map_err(|e| e.error)?;
             Ok(())
         })
@@ -3165,7 +3166,9 @@ impl Tool for WriteTool {
             }
 
             // Persist (atomic rename)
-            temp_file.persist(&path_clone).map_err(|e| e.error)?;
+            temp_file
+                .persist_with_retry(&path_clone)
+                .map_err(|e| e.error)?;
             Ok(())
         })
         .await
@@ -5594,7 +5597,7 @@ impl Tool for HashlineEditTool {
             }
 
             temp_file
-                .persist(&absolute_path_clone)
+                .persist_with_retry(&absolute_path_clone)
                 .map_err(|e| e.error)?;
             Ok(())
         })

@@ -2,6 +2,7 @@
 
 use crate::agent::QueueMode;
 use crate::error::{Error, Result};
+use crate::platform::NamedTempFileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write as _;
@@ -1257,7 +1258,7 @@ fn write_settings_json_atomic(path: &Path, value: &Value) -> Result<()> {
     tmp.write_all(contents.as_bytes())?;
     tmp.as_file().sync_all()?;
 
-    tmp.persist(path).map_err(|err| {
+    tmp.persist_with_retry(path).map_err(|err| {
         Error::config(format!(
             "Failed to persist settings file to {}: {}",
             path.display(),

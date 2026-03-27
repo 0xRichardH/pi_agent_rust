@@ -459,7 +459,7 @@ pub struct Cli {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_with_extension_flags, Cli, Commands, ROOT_SUBCOMMANDS};
+    use super::{Cli, Commands, ROOT_SUBCOMMANDS, parse_with_extension_flags};
     use clap::{CommandFactory, Parser};
 
     // ── 1. Basic flag parsing ────────────────────────────────────────
@@ -1384,9 +1384,8 @@ mod tests {
 
     mod proptest_cli {
         use crate::cli::{
-            is_known_short_flag, is_negative_numeric_token, known_long_option,
-            preprocess_extension_flags, short_flag_expects_value, ExtensionCliFlag,
-            ROOT_SUBCOMMANDS,
+            ExtensionCliFlag, ROOT_SUBCOMMANDS, is_known_short_flag, is_negative_numeric_token,
+            known_long_option, preprocess_extension_flags, short_flag_expects_value,
         };
         use proptest::prelude::*;
 

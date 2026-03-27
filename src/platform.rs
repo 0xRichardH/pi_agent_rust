@@ -126,3 +126,110 @@ mod tests {
         assert_eq!(arch_name(), "arm64");
     }
 }
+
+// ---------------------------------------------------------------------------
+// File System Ext
+// ---------------------------------------------------------------------------
+
+use std::path::Path;
+use tempfile::NamedTempFile;
+
+/// Extension trait for `NamedTempFile` to handle OS-specific persist issues.
+pub trait NamedTempFileExt {
+    /// Attempt to persist the file. On Windows, retries on "Access is denied"
+    /// (os error 5 / PermissionDenied) and "AlreadyExists", which typically
+    /// happen due to transient mandatory file locking (e.g. Antivirus).
+    fn persist_with_retry<P: AsRef<Path>>(
+        self,
+        path: P,
+    ) -> Result<std::fs::File, tempfile::PersistError>;
+}
+
+/// Extension trait for `TempPath` to handle OS-specific persist issues.
+pub trait TempPathExt {
+    fn persist_with_retry<P: AsRef<Path>>(self, path: P) -> Result<(), tempfile::PathPersistError>;
+}
+
+impl NamedTempFileExt for NamedTempFile {
+    #[cfg(windows)]
+    fn persist_with_retry<P: AsRef<Path>>(
+        self,
+        path: P,
+    ) -> Result<std::fs::File, tempfile::PersistError> {
+        let mut attempts = 0;
+        let mut tmp = self;
+        loop {
+            match tmp.persist(path.as_ref()) {
+                Ok(file) => return Ok(file),
+                Err(e) => {
+                    tmp = e.file;
+                    let err = e.error;
+                    if err.kind() == std::io::ErrorKind::PermissionDenied
+                        || err.kind() == std::io::ErrorKind::AlreadyExists
+                    {
+                        attempts += 1;
+                        if attempts > 10 {
+                            return Err(tempfile::PersistError {
+                                file: tmp,
+                                error: err,
+                            });
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5 * attempts));
+                        continue;
+                    }
+                    return Err(tempfile::PersistError {
+                        file: tmp,
+                        error: err,
+                    });
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn persist_with_retry<P: AsRef<Path>>(
+        self,
+        path: P,
+    ) -> Result<std::fs::File, tempfile::PersistError> {
+        self.persist(path)
+    }
+}
+
+impl TempPathExt for tempfile::TempPath {
+    #[cfg(windows)]
+    fn persist_with_retry<P: AsRef<Path>>(self, path: P) -> Result<(), tempfile::PathPersistError> {
+        let mut attempts = 0;
+        let mut tmp = self;
+        loop {
+            match tmp.persist(path.as_ref()) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    tmp = e.path;
+                    let err = e.error;
+                    if err.kind() == std::io::ErrorKind::PermissionDenied
+                        || err.kind() == std::io::ErrorKind::AlreadyExists
+                    {
+                        attempts += 1;
+                        if attempts > 10 {
+                            return Err(tempfile::PathPersistError {
+                                path: tmp,
+                                error: err,
+                            });
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5 * attempts));
+                        continue;
+                    }
+                    return Err(tempfile::PathPersistError {
+                        path: tmp,
+                        error: err,
+                    });
+                }
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn persist_with_retry<P: AsRef<Path>>(self, path: P) -> Result<(), tempfile::PathPersistError> {
+        self.persist(path)
+    }
+}

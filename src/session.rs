@@ -12,6 +12,7 @@ use crate::model::{
     AssistantMessage, ContentBlock, Message, TextContent, ToolResultMessage, UserContent,
     UserMessage,
 };
+use crate::platform::NamedTempFileExt;
 use crate::session_index::{
     SessionIndex, enqueue_session_index_snapshot_update, session_file_stats,
 };
@@ -72,7 +73,7 @@ fn save_jsonl_full_rewrite_blocking(
         writer.flush()?;
     }
     temp_file
-        .persist(path)
+        .persist_with_retry(path)
         .map_err(|e| crate::Error::Io(Box::new(e.error)))?;
 
     enqueue_session_index_snapshot_update(sessions_root, path, header, message_count, session_name);

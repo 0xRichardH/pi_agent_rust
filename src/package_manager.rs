@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::extension_index::ExtensionIndexStore;
 use crate::extensions::{CompatibilityScanner, load_extension_manifest};
+use crate::platform::TempPathExt;
 use asupersync::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -3764,7 +3765,7 @@ fn write_settings_json_atomic(path: &Path, value: &Value) -> Result<()> {
     fs::write(tmp.path(), data)?;
     let tmp_path = tmp.into_temp_path();
     tmp_path
-        .persist(path)
+        .persist_with_retry(path)
         .map_err(|e| Error::Io(Box::new(e.error)))?;
     Ok(())
 }
