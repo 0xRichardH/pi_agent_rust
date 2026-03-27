@@ -12,7 +12,9 @@ use crate::model::{
     AssistantMessage, ContentBlock, Message, TextContent, ToolResultMessage, UserContent,
     UserMessage,
 };
-use crate::platform::NamedTempFileExt;
+use crate::platform::{
+    NamedTempFileExt, is_windows_transient_io_error_kind, retry_io_with_backoff,
+};
 use crate::session_index::{
     SessionIndex, enqueue_session_index_snapshot_update, session_file_stats,
 };
@@ -88,17 +90,35 @@ fn append_jsonl_entries_blocking(
     message_count: u64,
     session_name: Option<String>,
 ) -> Result<()> {
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|e| crate::Error::Io(Box::new(e)))?;
+    let append_error = |phase: &str, err: std::io::Error| {
+        crate::Error::Io(Box::new(std::io::Error::new(
+            err.kind(),
+            format!(
+                "session autosave append failed during {phase} for {}: {err}",
+                path.display()
+            ),
+        )))
+    };
 
-    file.lock_exclusive()?;
-    file.write_all(serialized_entries)?;
-    FileExt::unlock(&file)?;
+    let mut file = retry_io_with_backoff(|| {
+        std::fs::OpenOptions::new().append(true).open(path)
+    })
+    .map_err(|e| append_error("open", e))?;
+
+    retry_io_with_backoff(|| file.lock_exclusive()).map_err(|e| append_error("lock", e))?;
+    retry_io_with_backoff(|| file.write_all(serialized_entries))
+        .map_err(|e| append_error("write", e))?;
+    FileExt::unlock(&file).map_err(|e| append_error("unlock", e))?;
 
     enqueue_session_index_snapshot_update(sessions_root, path, header, message_count, session_name);
     Ok(())
+}
+
+fn is_windows_transient_session_io_error(err: &Error) -> bool {
+    match err {
+        Error::Io(io_err) => is_windows_transient_io_error_kind(io_err.kind()),
+        _ => false,
+    }
 }
 
 /// Handle to a thread-safe shared session.
@@ -1805,7 +1825,7 @@ impl Session {
                         let header_snapshot = self.header.clone();
                         let path_for_task = path_clone.clone();
                         let sessions_root_for_task = sessions_root.clone();
-                        asupersync::runtime::spawn_blocking(move || {
+                        let append_result = asupersync::runtime::spawn_blocking(move || {
                             append_jsonl_entries_blocking(
                                 &path_for_task,
                                 &sessions_root_for_task,
@@ -1815,12 +1835,53 @@ impl Session {
                                 session_name,
                             )
                         })
-                        .await?;
+                        .await;
 
-                        self.persisted_entry_count
-                            .store(new_count, Ordering::SeqCst);
-                        self.appends_since_checkpoint += 1;
-                        self.v2_sidecar_stale = self.v2_sidecar_root.is_some();
+                        if let Err(err) = append_result {
+                            if is_windows_transient_session_io_error(&err) {
+                                tracing::warn!(
+                                    path = %path_clone.display(),
+                                    error = %err,
+                                    "incremental session append failed after retries; falling back to full rewrite"
+                                );
+
+                                if self.v2_partial_hydration {
+                                    self.ensure_full_v2_hydration_before_save()?;
+                                }
+
+                                let message_count = self.cached_message_count;
+                                let session_name = self.cached_name.clone();
+                                let header_snapshot = self.header.clone();
+                                let entries_to_save = self.entries.clone();
+                                let path_for_task = path_clone.clone();
+                                let sessions_root_for_task = sessions_root.clone();
+                                asupersync::runtime::spawn_blocking(move || {
+                                    save_jsonl_full_rewrite_blocking(
+                                        &path_for_task,
+                                        &sessions_root_for_task,
+                                        &header_snapshot,
+                                        &entries_to_save,
+                                        message_count,
+                                        session_name,
+                                    )
+                                })
+                                .await?;
+
+                                self.persisted_entry_count
+                                    .store(self.entries.len(), Ordering::SeqCst);
+                                self.header_dirty = false;
+                                self.appends_since_checkpoint = 0;
+                                self.v2_sidecar_stale = self.v2_sidecar_root.is_some();
+                            } else {
+                                return Err(err);
+                            }
+                        }
+
+                        if self.persisted_entry_count.load(Ordering::SeqCst) != self.entries.len() {
+                            self.persisted_entry_count.store(new_count, Ordering::SeqCst);
+                            self.appends_since_checkpoint += 1;
+                            self.v2_sidecar_stale = self.v2_sidecar_root.is_some();
+                        }
                     }
                     // No new entries → no-op, nothing to write.
                 }

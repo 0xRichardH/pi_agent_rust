@@ -64,6 +64,43 @@ pub fn pi_user_agent_with(extra: &str) -> String {
     format!("pi_agent_rust/{VERSION} {extra}")
 }
 
+use std::time::Duration;
+
+const WINDOWS_IO_RETRY_LIMIT: usize = 10;
+
+pub fn is_windows_transient_io_error_kind(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::AlreadyExists
+            | std::io::ErrorKind::WouldBlock
+    )
+}
+
+pub fn retry_io_with_backoff<T, F>(mut op: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempts = 0;
+    loop {
+        match op() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if !is_windows_transient_io_error_kind(err.kind()) {
+                    return Err(err);
+                }
+
+                attempts += 1;
+                if attempts > WINDOWS_IO_RETRY_LIMIT {
+                    return Err(err);
+                }
+
+                std::thread::sleep(Duration::from_millis((5 * attempts) as u64));
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -71,6 +108,8 @@ pub fn pi_user_agent_with(extra: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn os_name_not_empty() {
@@ -100,6 +139,56 @@ mod tests {
         let ua = pi_user_agent_with("Antigravity/1.2.3");
         assert!(ua.starts_with("pi_agent_rust/"));
         assert!(ua.ends_with("Antigravity/1.2.3"));
+    }
+
+    #[test]
+    fn retry_io_with_backoff_retries_permission_denied_then_succeeds() {
+        let attempts = AtomicUsize::new(0);
+
+        let value = retry_io_with_backoff(|| {
+            let current = attempts.fetch_add(1, Ordering::SeqCst);
+            if current < 2 {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"));
+            }
+
+            Ok("ok")
+        })
+        .expect("retry should eventually succeed");
+
+        assert_eq!(value, "ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn retry_io_with_backoff_retries_would_block_then_succeeds() {
+        let attempts = AtomicUsize::new(0);
+
+        let value = retry_io_with_backoff(|| {
+            let current = attempts.fetch_add(1, Ordering::SeqCst);
+            if current < 1 {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "busy"));
+            }
+
+            Ok(7usize)
+        })
+        .expect("retry should eventually succeed");
+
+        assert_eq!(value, 7);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn retry_io_with_backoff_does_not_retry_non_transient_errors() {
+        let attempts = AtomicUsize::new(0);
+
+        let err = retry_io_with_backoff::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err(io::Error::new(io::ErrorKind::NotFound, "missing"))
+        })
+        .expect_err("non-transient errors should not be retried");
+
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(target_os = "linux")]
@@ -164,11 +253,9 @@ impl NamedTempFileExt for NamedTempFile {
                 Err(e) => {
                     tmp = e.file;
                     let err = e.error;
-                    if err.kind() == std::io::ErrorKind::PermissionDenied
-                        || err.kind() == std::io::ErrorKind::AlreadyExists
-                    {
+                    if is_windows_transient_io_error_kind(err.kind()) {
                         attempts += 1;
-                        if attempts > 10 {
+                        if attempts > WINDOWS_IO_RETRY_LIMIT {
                             return Err(tempfile::PersistError {
                                 file: tmp,
                                 error: err,
@@ -206,11 +293,9 @@ impl TempPathExt for tempfile::TempPath {
                 Err(e) => {
                     tmp = e.path;
                     let err = e.error;
-                    if err.kind() == std::io::ErrorKind::PermissionDenied
-                        || err.kind() == std::io::ErrorKind::AlreadyExists
-                    {
+                    if is_windows_transient_io_error_kind(err.kind()) {
                         attempts += 1;
-                        if attempts > 10 {
+                        if attempts > WINDOWS_IO_RETRY_LIMIT {
                             return Err(tempfile::PathPersistError {
                                 path: tmp,
                                 error: err,
