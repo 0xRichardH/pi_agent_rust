@@ -8,6 +8,7 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::http::client::Client;
+use crate::platform::NamedTempFileExt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -416,43 +417,9 @@ impl ExtensionIndexStore {
 }
 
 fn persist_tempfile_for_cache(tmp: NamedTempFile, path: &Path) -> std::io::Result<()> {
-    match tmp.persist(path) {
-        Ok(_) => Ok(()),
-        Err(err) => persist_tempfile_for_cache_after_conflict(err, path),
-    }
-}
-
-#[cfg(windows)]
-fn persist_tempfile_for_cache_after_conflict(
-    err: tempfile::PersistError,
-    path: &Path,
-) -> std::io::Result<()> {
-    if err.error.kind() != std::io::ErrorKind::AlreadyExists {
-        return Err(err.error);
-    }
-
-    // Extension index writes are documented as fail-open cache refreshes.
-    // On Windows, `persist()` may reject replacing an existing file, so retry
-    // with a best-effort remove+persist fallback instead of surfacing a
-    // permanent refresh failure.
-    match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(remove_err) if remove_err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(remove_err) => return Err(remove_err),
-    }
-
-    err.file
-        .persist(path)
+    tmp.persist_with_retry(path)
         .map(|_| ())
-        .map_err(|persist_err| persist_err.error)
-}
-
-#[cfg(not(windows))]
-fn persist_tempfile_for_cache_after_conflict(
-    err: tempfile::PersistError,
-    _path: &Path,
-) -> std::io::Result<()> {
-    Err(err.error)
+        .map_err(|e| e.error)
 }
 
 fn merge_entries(

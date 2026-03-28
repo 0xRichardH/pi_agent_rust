@@ -78,8 +78,7 @@ fs4 = "0.13"
 glob = "0.3"
 ignore = "0.4"
 crossbeam-queue = "0.3"
-sqlmodel-sqlite = { version = "0.2.0" }
-sqlmodel-core = { version = "0.2.0" }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
@@ -160,6 +159,9 @@ harness = false
 # Gap H: jemalloc for 10-20% allocation-heavy path improvement.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+atomic-write-file = "0.3.0"
 
 [features]
 default = ["image-resize", "jemalloc", "clipboard", "wasm-host", "sqlite-sessions"]

@@ -7,6 +7,7 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::platform::NamedTempFileExt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -289,7 +290,7 @@ impl PermissionStore {
         tmp.write_all(contents.as_bytes())?;
         tmp.as_file().sync_all()?;
 
-        tmp.persist(&self.path).map_err(|err| {
+        tmp.persist_with_retry(&self.path).map_err(|err| {
             Error::config(format!(
                 "Failed to persist permissions file to {}: {}",
                 self.path.display(),

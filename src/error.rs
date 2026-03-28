@@ -52,7 +52,7 @@ pub enum Error {
 
     /// SQLite errors
     #[error("SQLite error: {0}")]
-    Sqlite(#[from] Box<sqlmodel_core::Error>),
+    Sqlite(#[from] Box<rusqlite::Error>),
 
     /// User aborted operation
     #[error("Operation aborted")]
@@ -843,7 +843,7 @@ fn io_hints(err: &std::io::Error) -> ErrorHints {
     }
 }
 
-fn sqlite_hints(err: &sqlmodel_core::Error) -> ErrorHints {
+fn sqlite_hints(err: &rusqlite::Error) -> ErrorHints {
     let details = err.to_string();
     let lower = details.to_lowercase();
     if contains_any(&lower, &["database is locked", "busy"]) {
@@ -887,8 +887,8 @@ impl From<serde_json::Error> for Error {
     }
 }
 
-impl From<sqlmodel_core::Error> for Error {
-    fn from(value: sqlmodel_core::Error) -> Self {
+impl From<rusqlite::Error> for Error {
+    fn from(value: rusqlite::Error) -> Self {
         Self::Sqlite(Box::new(value))
     }
 }
@@ -1236,11 +1236,10 @@ mod tests {
         };
         let h = err.hints();
         assert!(h.summary.contains("not found"));
-        assert!(
-            h.context
-                .iter()
-                .any(|(k, v)| k == "path" && v.contains("/tmp/session.jsonl"))
-        );
+        assert!(h
+            .context
+            .iter()
+            .any(|(k, v)| k == "path" && v.contains("/tmp/session.jsonl")));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::platform::NamedTempFileExt;
 use crate::provider_metadata::{canonical_provider_id, provider_auth_env_keys, provider_metadata};
 use base64::Engine as _;
 use fs4::fs_std::FileExt;
@@ -410,7 +411,7 @@ impl AuthStorage {
         temp.write_all(data.as_bytes())?;
         temp.as_file().sync_all()?;
         before_persist(&temp)?;
-        temp.persist(path).map_err(|err| err.error)?;
+        temp.persist_with_retry(path).map_err(|err| err.error)?;
         sync_parent_dir(path)?;
 
         Ok(())
@@ -994,8 +995,8 @@ fn resolve_external_provider_api_key(provider: &str) -> Option<String> {
             read_external_gemini_access_payload(project.as_deref())
         }
         "google-antigravity" => {
-            let project = google_project_id_from_env()
-                .unwrap_or_else(google_antigravity_default_project_id);
+            let project =
+                google_project_id_from_env().unwrap_or_else(google_antigravity_default_project_id);
             read_external_gemini_access_payload(Some(project.as_str()))
         }
         "kimi-for-coding" => read_external_kimi_code_access_token(),
@@ -1025,8 +1026,8 @@ pub fn external_setup_source(provider: &str) -> Option<&'static str> {
                 .then_some("Gemini CLI (~/.gemini/oauth_creds.json)")
         }
         "google-antigravity" => {
-            let project = google_project_id_from_env()
-                .unwrap_or_else(google_antigravity_default_project_id);
+            let project =
+                google_project_id_from_env().unwrap_or_else(google_antigravity_default_project_id);
             if read_external_gemini_access_payload(Some(project.as_str())).is_some() {
                 Some("Gemini CLI (~/.gemini/oauth_creds.json)")
             } else {
@@ -2363,16 +2364,14 @@ pub async fn complete_anthropic_oauth(code_input: &str, verifier: &str) -> Resul
     let redirect_uri = anthropic_oauth_redirect_uri();
 
     let client = crate::http::client::Client::new();
-    let request = client
-        .post(&token_url)
-        .json(&serde_json::json!({
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "code": code,
-            "state": state,
-            "redirect_uri": redirect_uri,
-            "code_verifier": verifier,
-        }))?;
+    let request = client.post(&token_url).json(&serde_json::json!({
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "code": code,
+        "state": state,
+        "redirect_uri": redirect_uri,
+        "code_verifier": verifier,
+    }))?;
 
     let response = Box::pin(request.send())
         .await
@@ -2410,13 +2409,11 @@ async fn refresh_anthropic_oauth_token(
     let client_id = anthropic_oauth_client_id();
     let token_url = anthropic_oauth_token_url();
 
-    let request = client
-        .post(&token_url)
-        .json(&serde_json::json!({
-            "grant_type": "refresh_token",
-            "client_id": client_id,
-            "refresh_token": refresh_token,
-        }))?;
+    let request = client.post(&token_url).json(&serde_json::json!({
+        "grant_type": "refresh_token",
+        "client_id": client_id,
+        "refresh_token": refresh_token,
+    }))?;
 
     let response = Box::pin(request.send())
         .await
@@ -2952,10 +2949,7 @@ async fn start_kimi_code_device_flow_with_client(
 ) -> Result<DeviceCodeResponse> {
     let kimi_client_id = kimi_code_oauth_client_id();
     let url = kimi_code_endpoint_for_host(oauth_host, KIMI_CODE_DEVICE_AUTHORIZATION_PATH);
-    let form_body = format!(
-        "client_id={}",
-        percent_encode_component(&kimi_client_id)
-    );
+    let form_body = format!("client_id={}", percent_encode_component(&kimi_client_id));
     let mut request = client
         .post(&url)
         .header("Content-Type", "application/x-www-form-urlencoded")
