@@ -711,8 +711,7 @@ mod tests {
     use crate::session::{SessionMessage, SessionStoreKind};
     #[cfg(feature = "sqlite-sessions")]
     use asupersync::runtime::RuntimeBuilder;
-    use sqlmodel_core::Value;
-    use sqlmodel_sqlite::{OpenFlags, SqliteConfig, SqliteConnection};
+    use rusqlite::{Connection, OpenFlags};
     #[cfg(feature = "sqlite-sessions")]
     use std::future::Future;
 
@@ -1251,21 +1250,18 @@ mod tests {
         index.reindex_all().expect("seed session index");
 
         let db_path = base_dir.join("session-index.sqlite");
-        let config = SqliteConfig::file(db_path.to_string_lossy())
-            .flags(OpenFlags::create_read_write())
-            .busy_timeout(5000);
-        let conn = SqliteConnection::open(&config).expect("open session index sqlite");
-        conn.execute_sync(
+        let conn = Connection::open(&db_path).expect("open session index sqlite");
+        conn.busy_timeout(Duration::from_millis(5000))
+            .expect("set busy timeout");
+        conn.execute(
             "UPDATE sessions
              SET message_count=?1, size_bytes=?2, name=?3
              WHERE path=?4",
-            &[
-                Value::BigInt(0),
-                Value::BigInt(
-                    i64::try_from(expected.size_bytes.saturating_sub(1)).expect("size fits in i64"),
-                ),
-                Value::Text("Stale name".to_string()),
-                Value::Text(session_path.display().to_string()),
+            [
+                &0i64,
+                &i64::try_from(expected.size_bytes.saturating_sub(1)).expect("size fits in i64"),
+                &"Stale name",
+                &session_path.display().to_string(),
             ],
         )
         .expect("corrupt cached row");

@@ -1437,12 +1437,10 @@ mod tests {
         };
         let invalid_json =
             serde_json::to_string(&invalid_header).expect("serialize invalid session header");
-        let config = sqlmodel_sqlite::SqliteConfig::file(path.to_string_lossy())
-            .flags(sqlmodel_sqlite::OpenFlags::create_read_write());
-        let conn = sqlmodel_sqlite::SqliteConnection::open(&config).expect("open sqlite db");
-        conn.execute_sync(
+        let conn = rusqlite::Connection::open(&path).expect("open sqlite db");
+        conn.execute(
             "UPDATE pi_session_header SET json = ?1",
-            &[sqlmodel_core::Value::Text(invalid_json)],
+            [&invalid_json],
         )
         .expect("corrupt sqlite header row");
         assert!(!is_session_healthy(&path));

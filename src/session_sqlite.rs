@@ -1,8 +1,7 @@
 use crate::error::{Error, Result};
 use crate::session::{SessionEntry, SessionHeader};
 use crate::session_metrics;
-use sqlmodel_core::{Error as SqliteError, Row as SqliteRow, Value as SqliteValue};
-use sqlmodel_sqlite::{OpenFlags, SqliteConfig, SqliteConnection};
+use rusqlite::{Connection, OpenFlags, Row};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -34,27 +33,28 @@ pub struct SqliteSessionMeta {
     pub name: Option<String>,
 }
 
-fn map_sqlite_result<T>(result: std::result::Result<T, SqliteError>) -> Result<T> {
+fn map_sqlite_result<T>(result: std::result::Result<T, rusqlite::Error>) -> Result<T> {
     result.map_err(|err| Error::session(format!("SQLite session error: {err}")))
 }
 
-fn open_sqlite_connection_read_only(path: &Path) -> Result<SqliteConnection> {
-    let config = SqliteConfig::file(path.to_string_lossy()).flags(OpenFlags::read_only());
-    map_sqlite_result(SqliteConnection::open(&config))
+fn open_sqlite_connection_read_only(path: &Path) -> Result<Connection> {
+    map_sqlite_result(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ))
 }
 
-fn open_sqlite_connection_read_write(path: &Path) -> Result<SqliteConnection> {
-    let config = SqliteConfig::file(path.to_string_lossy()).flags(OpenFlags::create_read_write());
-    map_sqlite_result(SqliteConnection::open(&config))
+fn open_sqlite_connection_read_write(path: &Path) -> Result<Connection> {
+    map_sqlite_result(Connection::open(path))
 }
 
-fn row_get_string(row: &SqliteRow, column: &str) -> Result<String> {
-    row.get_named::<String>(column)
+fn row_get_string(row: &Row, column: &str) -> Result<String> {
+    row.get(column)
         .map_err(|err| Error::session(format!("SQLite row read failed: {err}")))
 }
 
-fn rollback_quietly(conn: &SqliteConnection) {
-    let _ = conn.execute_raw("ROLLBACK");
+fn rollback_quietly(conn: &Connection) {
+    let _ = conn.execute("ROLLBACK", []);
 }
 
 fn compute_message_count_and_name(entries: &[SessionEntry]) -> (u64, Option<String>) {
@@ -88,24 +88,28 @@ pub async fn load_session(path: &Path) -> Result<(SessionHeader, Vec<SessionEntr
 
     let conn = open_sqlite_connection_read_only(path)?;
 
-    let header_rows =
-        map_sqlite_result(conn.query_sync("SELECT json FROM pi_session_header LIMIT 1", &[]))?;
-    let header_row = header_rows
-        .first()
-        .ok_or_else(|| Error::session("SQLite session missing header row"))?;
-    let header_json = row_get_string(header_row, "json")?;
+    let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_header LIMIT 1"))?;
+    let header_json: String = map_sqlite_result(
+        stmt.query_map([], |row| row.get(0))?
+            .next()
+            .ok_or_else(|| Error::session("SQLite session missing header row"))??,
+    )?;
+    drop(stmt);
+
     let header: SessionHeader = serde_json::from_str(&header_json)?;
     header
         .validate()
         .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
 
-    let entry_rows = map_sqlite_result(
-        conn.query_sync("SELECT json FROM pi_session_entries ORDER BY seq ASC", &[]),
+    let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_entries ORDER BY seq ASC"))?;
+    let entry_rows: Vec<String> = map_sqlite_result(
+        stmt.query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>(),
     )?;
+    drop(stmt);
 
     let mut entries = Vec::with_capacity(entry_rows.len());
-    for row in entry_rows {
-        let json = row_get_string(&row, "json")?;
+    for json in entry_rows {
         let entry: SessionEntry = serde_json::from_str(&json)?;
         entries.push(entry);
     }
@@ -125,29 +129,33 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
 
     let conn = open_sqlite_connection_read_only(path)?;
 
-    let header_rows =
-        map_sqlite_result(conn.query_sync("SELECT json FROM pi_session_header LIMIT 1", &[]))?;
-    let header_row = header_rows
-        .first()
-        .ok_or_else(|| Error::session("SQLite session missing header row"))?;
-    let header_json = row_get_string(header_row, "json")?;
+    let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_header LIMIT 1"))?;
+    let header_json: String = map_sqlite_result(
+        stmt.query_map([], |row| row.get(0))?
+            .next()
+            .ok_or_else(|| Error::session("SQLite session missing header row"))??,
+    )?;
+    drop(stmt);
+
     let header: SessionHeader = serde_json::from_str(&header_json)?;
     header
         .validate()
         .map_err(|reason| Error::session(format!("Invalid session header: {reason}")))?;
 
-    let meta_rows = conn
-        .query_sync(
-            "SELECT key,value FROM pi_session_meta WHERE key IN ('message_count','name')",
-            &[],
-        )
-        .unwrap_or_default();
+    let meta_rows: Vec<(String, String)> = match conn.prepare(
+        "SELECT key,value FROM pi_session_meta WHERE key IN ('message_count','name')",
+    ) {
+        Ok(mut stmt) => stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap_or_default()
+            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
+            .unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
 
     let mut message_count: Option<u64> = None;
     let mut name: Option<String> = None;
-    for row in meta_rows {
-        let key = row_get_string(&row, "key")?;
-        let value = row_get_string(&row, "value")?;
+    for (key, value) in meta_rows {
         match key.as_str() {
             "message_count" => message_count = value.parse::<u64>().ok(),
             "name" => {
@@ -162,13 +170,15 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
     let message_count = if let Some(message_count) = message_count {
         message_count
     } else {
-        let entry_rows = map_sqlite_result(
-            conn.query_sync("SELECT json FROM pi_session_entries ORDER BY seq ASC", &[]),
+        let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_entries ORDER BY seq ASC"))?;
+        let entry_rows: Vec<String> = map_sqlite_result(
+            stmt.query_map([], |row| row.get(0))?
+                .collect::<std::result::Result<Vec<_>, rusqlite::Error>>(),
         )?;
+        drop(stmt);
 
         let mut entries = Vec::with_capacity(entry_rows.len());
-        for row in entry_rows {
-            let json = row_get_string(&row, "json")?;
+        for json in entry_rows {
             let entry: SessionEntry = serde_json::from_str(&json)?;
             entries.push(entry);
         }
@@ -387,8 +397,8 @@ mod tests {
 
     #[test]
     fn map_sqlite_result_err() {
-        let config = SqliteConfig::file("bad\0path").flags(OpenFlags::create_read_write());
-        let result = map_sqlite_result::<i32>(SqliteConnection::open(&config).map(|_| 42));
+        // Create an error by trying to open an invalid path
+        let result = map_sqlite_result::<i32>(Connection::open("bad\0path").map(|_| 42));
         let err = result.unwrap_err();
         match err {
             Error::Session(message) => {
@@ -524,12 +534,10 @@ mod tests {
         };
         let invalid_json =
             serde_json::to_string(&invalid_header).expect("serialize invalid session header");
-        let config = sqlmodel_sqlite::SqliteConfig::file(path.to_string_lossy())
-            .flags(sqlmodel_sqlite::OpenFlags::create_read_write());
-        let conn = sqlmodel_sqlite::SqliteConnection::open(&config).expect("open sqlite db");
-        conn.execute_sync(
+        let conn = Connection::open(&path).expect("open sqlite db");
+        conn.execute(
             "UPDATE pi_session_header SET json = ?1",
-            &[sqlmodel_core::Value::Text(invalid_json)],
+            [&invalid_json],
         )
         .expect("corrupt sqlite header row");
 
@@ -601,14 +609,14 @@ pub async fn save_session(
     }
 
     let conn = open_sqlite_connection_read_write(path)?;
-    map_sqlite_result(conn.execute_raw(INIT_SQL))?;
-    map_sqlite_result(conn.execute_raw("BEGIN IMMEDIATE"))?;
+    map_sqlite_result(conn.execute(INIT_SQL, []))?;
+    map_sqlite_result(conn.execute("BEGIN IMMEDIATE", []))?;
 
     // Serialize header + entries and track serialization time + bytes.
     let save_result = (|| -> Result<()> {
-        map_sqlite_result(conn.execute_sync("DELETE FROM pi_session_entries", &[]))?;
-        map_sqlite_result(conn.execute_sync("DELETE FROM pi_session_header", &[]))?;
-        map_sqlite_result(conn.execute_sync("DELETE FROM pi_session_meta", &[]))?;
+        map_sqlite_result(conn.execute("DELETE FROM pi_session_entries", []))?;
+        map_sqlite_result(conn.execute("DELETE FROM pi_session_header", []))?;
+        map_sqlite_result(conn.execute("DELETE FROM pi_session_meta", []))?;
 
         let serialize_timer = metrics.start_timer(&metrics.sqlite_serialize);
         let header_json = serde_json::to_string(header)?;
@@ -623,46 +631,37 @@ pub async fn save_session(
         serialize_timer.finish();
         metrics.record_bytes(&metrics.sqlite_bytes, total_json_bytes);
 
-        map_sqlite_result(conn.execute_sync(
+        map_sqlite_result(conn.execute(
             "INSERT INTO pi_session_header (id,json) VALUES (?1,?2)",
-            &[
-                SqliteValue::Text(header.id.clone()),
-                SqliteValue::Text(header_json),
-            ],
+            [&header.id, &header_json],
         ))?;
 
         let mut seq = 1_i64;
         for chunk in entry_jsons.chunks(200) {
             let mut sql = String::with_capacity(64 + chunk.len() * 16);
             sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
-            let mut params = Vec::with_capacity(chunk.len() * 2);
+            let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() * 2);
             for (i, json) in chunk.iter().enumerate() {
                 if i > 0 {
                     sql.push(',');
                 }
                 let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
-                params.push(SqliteValue::BigInt(seq));
-                params.push(SqliteValue::Text(json.clone()));
+                params.push(&seq);
+                params.push(json.as_str());
                 seq += 1;
             }
-            map_sqlite_result(conn.execute_sync(&sql, &params))?;
+            map_sqlite_result(conn.execute(&sql, rusqlite::params_from_iter(params.iter())))?;
         }
 
         let (message_count, name) = compute_message_count_and_name(entries);
-        map_sqlite_result(conn.execute_sync(
+        map_sqlite_result(conn.execute(
             "INSERT INTO pi_session_meta (key,value) VALUES (?1,?2)",
-            &[
-                SqliteValue::Text("message_count".to_string()),
-                SqliteValue::Text(message_count.to_string()),
-            ],
+            ["message_count", &message_count.to_string()],
         ))?;
         let name_value = name.unwrap_or_default();
-        map_sqlite_result(conn.execute_sync(
+        map_sqlite_result(conn.execute(
             "INSERT INTO pi_session_meta (key,value) VALUES (?1,?2)",
-            &[
-                SqliteValue::Text("name".to_string()),
-                SqliteValue::Text(name_value),
-            ],
+            ["name", &name_value],
         ))?;
 
         Ok(())
@@ -670,7 +669,7 @@ pub async fn save_session(
 
     match save_result {
         Ok(()) => {
-            map_sqlite_result(conn.execute_raw("COMMIT"))?;
+            map_sqlite_result(conn.execute("COMMIT", []))?;
             Ok(())
         }
         Err(err) => {
@@ -701,8 +700,8 @@ pub async fn append_entries(
     let conn = open_sqlite_connection_read_write(path)?;
 
     // Ensure WAL mode is active and tables exist (especially pi_session_meta for old DBs).
-    map_sqlite_result(conn.execute_raw(INIT_SQL))?;
-    map_sqlite_result(conn.execute_raw("BEGIN IMMEDIATE"))?;
+    map_sqlite_result(conn.execute(INIT_SQL, []))?;
+    map_sqlite_result(conn.execute("BEGIN IMMEDIATE", []))?;
 
     let append_result = (|| -> Result<()> {
         // Serialize and insert only the new entries.
@@ -723,34 +722,28 @@ pub async fn append_entries(
         for chunk in entry_jsons.chunks(200) {
             let mut sql = String::with_capacity(64 + chunk.len() * 16);
             sql.push_str("INSERT INTO pi_session_entries (seq,json) VALUES ");
-            let mut params = Vec::with_capacity(chunk.len() * 2);
+            let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(chunk.len() * 2);
             for (i, json) in chunk.iter().enumerate() {
                 if i > 0 {
                     sql.push(',');
                 }
                 let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
-                params.push(SqliteValue::BigInt(seq));
-                params.push(SqliteValue::Text(json.clone()));
+                params.push(&seq);
+                params.push(json.as_str());
                 seq += 1;
             }
-            map_sqlite_result(conn.execute_sync(&sql, &params))?;
+            map_sqlite_result(conn.execute(&sql, rusqlite::params_from_iter(params.iter())))?;
         }
 
         // Upsert meta counters (INSERT OR REPLACE).
-        map_sqlite_result(conn.execute_sync(
+        map_sqlite_result(conn.execute(
             "INSERT OR REPLACE INTO pi_session_meta (key,value) VALUES (?1,?2)",
-            &[
-                SqliteValue::Text("message_count".to_string()),
-                SqliteValue::Text(message_count.to_string()),
-            ],
+            ["message_count", &message_count.to_string()],
         ))?;
         let name_value = session_name.unwrap_or("");
-        map_sqlite_result(conn.execute_sync(
+        map_sqlite_result(conn.execute(
             "INSERT OR REPLACE INTO pi_session_meta (key,value) VALUES (?1,?2)",
-            &[
-                SqliteValue::Text("name".to_string()),
-                SqliteValue::Text(name_value.to_string()),
-            ],
+            ["name", name_value],
         ))?;
 
         Ok(())
@@ -758,7 +751,7 @@ pub async fn append_entries(
 
     match append_result {
         Ok(()) => {
-            map_sqlite_result(conn.execute_raw("COMMIT"))?;
+            map_sqlite_result(conn.execute("COMMIT", []))?;
             Ok(())
         }
         Err(err) => {

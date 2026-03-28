@@ -52,7 +52,7 @@ pub enum Error {
 
     /// SQLite errors
     #[error("SQLite error: {0}")]
-    Sqlite(#[from] Box<sqlmodel_core::Error>),
+    Sqlite(#[from] Box<rusqlite::Error>),
 
     /// User aborted operation
     #[error("Operation aborted")]
@@ -1236,11 +1236,10 @@ mod tests {
         };
         let h = err.hints();
         assert!(h.summary.contains("not found"));
-        assert!(
-            h.context
-                .iter()
-                .any(|(k, v)| k == "path" && v.contains("/tmp/session.jsonl"))
-        );
+        assert!(h
+            .context
+            .iter()
+            .any(|(k, v)| k == "path" && v.contains("/tmp/session.jsonl")));
     }
 
     #[test]

@@ -78,8 +78,7 @@ fs4 = "0.13"
 glob = "0.3"
 ignore = "0.4"
 crossbeam-queue = "0.3"
-sqlmodel-sqlite = { version = "0.2.0" }
-sqlmodel-core = { version = "0.2.0" }
+rusqlite = { version = "0.38", features = ["bundled"] }
 
 # Time
 chrono = { version = "0.4", features = ["serde"] }
