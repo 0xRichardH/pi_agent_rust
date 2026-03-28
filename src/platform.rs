@@ -64,8 +64,6 @@ pub fn pi_user_agent_with(extra: &str) -> String {
     format!("pi_agent_rust/{VERSION} {extra}")
 }
 
-use std::time::Duration;
-
 const WINDOWS_IO_RETRY_LIMIT: usize = 10;
 
 #[cfg(windows)]
@@ -102,7 +100,7 @@ where
                     return Err(err);
                 }
 
-                std::thread::sleep(Duration::from_millis((5 * attempts) as u64));
+                std::thread::sleep(std::time::Duration::from_millis((5 * attempts) as u64));
             }
         }
     }
@@ -113,8 +111,55 @@ pub fn retry_io_with_backoff<T, F>(mut op: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
 {
-    // On non-Windows platforms, don't retry - just run once
     op()
+}
+
+#[cfg(windows)]
+fn persist_retry_backup_path(path: &Path, attempt: usize) -> std::path::PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("persist-target");
+    path.with_file_name(format!(
+        ".{file_name}.pi-persist-backup-{}-{attempt}",
+        std::process::id()
+    ))
+}
+
+#[cfg(windows)]
+fn persist_with_existing_backup<T, F>(path: &Path, attempt: usize, persist: F) -> std::io::Result<T>
+where
+    F: FnOnce() -> std::io::Result<T>,
+{
+    let backup_path = persist_retry_backup_path(path, attempt);
+    let had_original = path.exists();
+
+    if had_original {
+        std::fs::rename(path, &backup_path)?;
+    }
+
+    match persist() {
+        Ok(value) => {
+            if had_original {
+                let _ = std::fs::remove_file(&backup_path);
+            }
+            Ok(value)
+        }
+        Err(err) => {
+            if had_original {
+                std::fs::rename(&backup_path, path).map_err(|restore_err| {
+                    std::io::Error::new(
+                        restore_err.kind(),
+                        format!(
+                            "failed to restore original file after persist failure for {}: {restore_err}; original error: {err}",
+                            path.display()
+                        ),
+                    )
+                })?;
+            }
+            Err(err)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -161,36 +206,48 @@ mod tests {
     fn retry_io_with_backoff_retries_permission_denied_then_succeeds() {
         let attempts = AtomicUsize::new(0);
 
-        let value = retry_io_with_backoff(|| {
+        let result = retry_io_with_backoff(|| {
             let current = attempts.fetch_add(1, Ordering::SeqCst);
             if current < 2 {
                 return Err(io::Error::new(io::ErrorKind::PermissionDenied, "locked"));
             }
 
             Ok("ok")
-        })
-        .expect("retry should eventually succeed");
+        });
 
-        assert_eq!(value, "ok");
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        if cfg!(windows) {
+            let value = result.expect("retry should eventually succeed");
+            assert_eq!(value, "ok");
+            assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        } else {
+            let err = result.expect_err("non-Windows should not retry");
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]
     fn retry_io_with_backoff_retries_would_block_then_succeeds() {
         let attempts = AtomicUsize::new(0);
 
-        let value = retry_io_with_backoff(|| {
+        let result = retry_io_with_backoff(|| {
             let current = attempts.fetch_add(1, Ordering::SeqCst);
             if current < 1 {
                 return Err(io::Error::new(io::ErrorKind::WouldBlock, "busy"));
             }
 
             Ok(7usize)
-        })
-        .expect("retry should eventually succeed");
+        });
 
-        assert_eq!(value, 7);
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        if cfg!(windows) {
+            let value = result.expect("retry should eventually succeed");
+            assert_eq!(value, 7);
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        } else {
+            let err = result.expect_err("non-Windows should not retry");
+            assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[test]
@@ -271,14 +328,34 @@ impl NamedTempFileExt for NamedTempFile {
                     tmp = e.file;
                     let err = e.error;
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
-                        // Remove the existing file and retry
                         if attempts < WINDOWS_IO_RETRY_LIMIT {
-                            let _ = std::fs::remove_file(&target_path);
                             attempts += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(
-                                (5 * attempts) as u64,
-                            ));
-                            continue;
+                            match persist_with_existing_backup(&target_path, attempts, || match tmp
+                                .persist(&target_path)
+                            {
+                                Ok(file) => Ok(file),
+                                Err(persist_err) => {
+                                    let tempfile::PersistError { file, error } = persist_err;
+                                    tmp = file;
+                                    Err(error)
+                                }
+                            }) {
+                                Ok(file) => return Ok(file),
+                                Err(retry_err) => {
+                                    if is_windows_transient_io_error_kind(retry_err.kind())
+                                        && attempts < WINDOWS_IO_RETRY_LIMIT
+                                    {
+                                        std::thread::sleep(std::time::Duration::from_millis(
+                                            (5 * attempts) as u64,
+                                        ));
+                                        continue;
+                                    }
+                                    return Err(tempfile::PersistError {
+                                        file: tmp,
+                                        error: retry_err,
+                                    });
+                                }
+                            }
                         }
                     }
                     if is_windows_transient_io_error_kind(err.kind()) {
@@ -323,14 +400,34 @@ impl TempPathExt for tempfile::TempPath {
                     tmp = e.path;
                     let err = e.error;
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
-                        // Remove the existing file and retry
                         if attempts < WINDOWS_IO_RETRY_LIMIT {
-                            let _ = std::fs::remove_file(&target_path);
                             attempts += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(
-                                (5 * attempts) as u64,
-                            ));
-                            continue;
+                            match persist_with_existing_backup(&target_path, attempts, || match tmp
+                                .persist(&target_path)
+                            {
+                                Ok(()) => Ok(()),
+                                Err(persist_err) => {
+                                    let tempfile::PathPersistError { path, error } = persist_err;
+                                    tmp = path;
+                                    Err(error)
+                                }
+                            }) {
+                                Ok(()) => return Ok(()),
+                                Err(retry_err) => {
+                                    if is_windows_transient_io_error_kind(retry_err.kind())
+                                        && attempts < WINDOWS_IO_RETRY_LIMIT
+                                    {
+                                        std::thread::sleep(std::time::Duration::from_millis(
+                                            (5 * attempts) as u64,
+                                        ));
+                                        continue;
+                                    }
+                                    return Err(tempfile::PathPersistError {
+                                        path: tmp,
+                                        error: retry_err,
+                                    });
+                                }
+                            }
                         }
                     }
                     if is_windows_transient_io_error_kind(err.kind()) {

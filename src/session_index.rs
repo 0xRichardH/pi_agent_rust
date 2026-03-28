@@ -154,19 +154,23 @@ impl SessionIndex {
                 .map_err(|e| Error::session(format!("Prepare failed: {e}")))?
             };
 
-            let rows: Vec<SessionMeta> = if let Some(cwd) = cwd {
-                stmt.query_map([cwd], |row| Ok(row_to_meta(row)?))
+            let mut rows = if let Some(cwd) = cwd {
+                stmt.query([cwd])
                     .map_err(|e| Error::session(format!("Query failed: {e}")))?
-                    .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
-                    .map_err(|e| Error::session(format!("Row conversion failed: {e}")))?
             } else {
-                stmt.query_map([], |row| Ok(row_to_meta(row)?))
+                stmt.query([])
                     .map_err(|e| Error::session(format!("Query failed: {e}")))?
-                    .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
-                    .map_err(|e| Error::session(format!("Row conversion failed: {e}")))?
             };
 
-            Ok(rows)
+            let mut result = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .map_err(|e| Error::session(format!("Row fetch failed: {e}")))?
+            {
+                result.push(row_to_meta(row)?);
+            }
+
+            Ok(result)
         })
     }
 

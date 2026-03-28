@@ -89,11 +89,13 @@ pub async fn load_session(path: &Path) -> Result<(SessionHeader, Vec<SessionEntr
     let conn = open_sqlite_connection_read_only(path)?;
 
     let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_header LIMIT 1"))?;
-    let header_json: String = map_sqlite_result(
-        stmt.query_map([], |row| row.get(0))?
-            .next()
-            .ok_or_else(|| Error::session("SQLite session missing header row"))??,
-    )?;
+    let mut rows = map_sqlite_result(stmt.query([]))?;
+    let header_json: String = if let Some(row) = map_sqlite_result(rows.next())? {
+        map_sqlite_result(row.get(0))?
+    } else {
+        return Err(Error::session("SQLite session missing header row"));
+    };
+    drop(rows);
     drop(stmt);
 
     let header: SessionHeader = serde_json::from_str(&header_json)?;
@@ -130,11 +132,13 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
     let conn = open_sqlite_connection_read_only(path)?;
 
     let mut stmt = map_sqlite_result(conn.prepare("SELECT json FROM pi_session_header LIMIT 1"))?;
-    let header_json: String = map_sqlite_result(
-        stmt.query_map([], |row| row.get(0))?
-            .next()
-            .ok_or_else(|| Error::session("SQLite session missing header row"))??,
-    )?;
+    let mut rows = map_sqlite_result(stmt.query([]))?;
+    let header_json: String = if let Some(row) = map_sqlite_result(rows.next())? {
+        map_sqlite_result(row.get(0))?
+    } else {
+        return Err(Error::session("SQLite session missing header row"));
+    };
+    drop(rows);
     drop(stmt);
 
     let header: SessionHeader = serde_json::from_str(&header_json)?;
