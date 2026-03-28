@@ -261,7 +261,7 @@ impl NamedTempFileExt for NamedTempFile {
                                 error: err,
                             });
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(5 * attempts));
+                        std::thread::sleep(std::time::Duration::from_millis((5 * attempts) as u64));
                         continue;
                     }
                     return Err(tempfile::PersistError {
@@ -301,7 +301,7 @@ impl TempPathExt for tempfile::TempPath {
                                 error: err,
                             });
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(5 * attempts));
+                        std::thread::sleep(std::time::Duration::from_millis((5 * attempts) as u64));
                         continue;
                     }
                     return Err(tempfile::PathPersistError {
