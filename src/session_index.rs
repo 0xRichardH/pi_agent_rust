@@ -93,6 +93,7 @@ impl SessionIndex {
                 let size_bytes = sqlite_i64_from_u64("size_bytes", meta.size_bytes)?;
                 let message_count_str = message_count.to_string();
                 let size_bytes_str = size_bytes.to_string();
+                let last_modified_ms_str = meta.last_modified_ms.to_string();
                 conn.execute(
                     "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
@@ -110,7 +111,7 @@ impl SessionIndex {
                         &meta.cwd,
                         &meta.timestamp,
                         &message_count_str,
-                        &meta.last_modified_ms,
+                        &last_modified_ms_str,
                         &size_bytes_str,
                         &meta.name,
                     ],
@@ -240,6 +241,7 @@ impl SessionIndex {
                     let size_bytes = sqlite_i64_from_u64("size_bytes", meta.size_bytes)?;
                     let message_count_str = message_count.to_string();
                     let size_bytes_str = size_bytes.to_string();
+                    let last_modified_ms_str = meta.last_modified_ms.to_string();
                     conn.execute(
                         "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -249,7 +251,7 @@ impl SessionIndex {
                             &meta.cwd,
                             &meta.timestamp,
                             &message_count_str,
-                            &meta.last_modified_ms,
+                            &last_modified_ms_str,
                             &size_bytes_str,
                             &meta.name,
                         ],
