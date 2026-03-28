@@ -115,51 +115,33 @@ where
 }
 
 #[cfg(windows)]
-fn persist_retry_backup_path(path: &Path, attempt: usize) -> std::path::PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("persist-target");
-    path.with_file_name(format!(
-        ".{file_name}.pi-persist-backup-{}-{attempt}",
-        std::process::id()
-    ))
+fn atomic_replace_from_reader(path: &Path, source: &mut impl std::io::Read) -> std::io::Result<()> {
+    let mut target = atomic_write_file::AtomicWriteFile::options().open(path)?;
+    std::io::copy(source, &mut target)?;
+    target.commit()?;
+    Ok(())
 }
 
 #[cfg(windows)]
-fn persist_with_existing_backup<T, F>(path: &Path, attempt: usize, persist: F) -> std::io::Result<T>
-where
-    F: FnOnce() -> std::io::Result<T>,
-{
-    let backup_path = persist_retry_backup_path(path, attempt);
-    let had_original = path.exists();
+fn persist_named_tempfile_by_atomic_replace(
+    tmp: &mut NamedTempFile,
+    path: &Path,
+) -> std::io::Result<std::fs::File> {
+    use std::io::Seek as _;
 
-    if had_original {
-        std::fs::rename(path, &backup_path)?;
-    }
+    let source = tmp.as_file_mut();
+    source.seek(std::io::SeekFrom::Start(0))?;
+    atomic_replace_from_reader(path, source)?;
+    std::fs::File::open(path)
+}
 
-    match persist() {
-        Ok(value) => {
-            if had_original {
-                let _ = std::fs::remove_file(&backup_path);
-            }
-            Ok(value)
-        }
-        Err(err) => {
-            if had_original {
-                std::fs::rename(&backup_path, path).map_err(|restore_err| {
-                    std::io::Error::new(
-                        restore_err.kind(),
-                        format!(
-                            "failed to restore original file after persist failure for {}: {restore_err}; original error: {err}",
-                            path.display()
-                        ),
-                    )
-                })?;
-            }
-            Err(err)
-        }
-    }
+#[cfg(windows)]
+fn persist_temppath_by_atomic_replace(
+    tmp: &tempfile::TempPath,
+    path: &Path,
+) -> std::io::Result<()> {
+    let mut source = std::fs::File::open(tmp)?;
+    atomic_replace_from_reader(path, &mut source)
 }
 
 // ---------------------------------------------------------------------------
@@ -330,16 +312,7 @@ impl NamedTempFileExt for NamedTempFile {
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
                         if attempts < WINDOWS_IO_RETRY_LIMIT {
                             attempts += 1;
-                            match persist_with_existing_backup(&target_path, attempts, || match tmp
-                                .persist(&target_path)
-                            {
-                                Ok(file) => Ok(file),
-                                Err(persist_err) => {
-                                    let tempfile::PersistError { file, error } = persist_err;
-                                    tmp = file;
-                                    Err(error)
-                                }
-                            }) {
+                            match persist_named_tempfile_by_atomic_replace(&mut tmp, &target_path) {
                                 Ok(file) => return Ok(file),
                                 Err(retry_err) => {
                                     if is_windows_transient_io_error_kind(retry_err.kind())
@@ -402,16 +375,7 @@ impl TempPathExt for tempfile::TempPath {
                     if err.kind() == std::io::ErrorKind::AlreadyExists {
                         if attempts < WINDOWS_IO_RETRY_LIMIT {
                             attempts += 1;
-                            match persist_with_existing_backup(&target_path, attempts, || match tmp
-                                .persist(&target_path)
-                            {
-                                Ok(()) => Ok(()),
-                                Err(persist_err) => {
-                                    let tempfile::PathPersistError { path, error } = persist_err;
-                                    tmp = path;
-                                    Err(error)
-                                }
-                            }) {
+                            match persist_temppath_by_atomic_replace(&tmp, &target_path) {
                                 Ok(()) => return Ok(()),
                                 Err(retry_err) => {
                                     if is_windows_transient_io_error_kind(retry_err.kind())

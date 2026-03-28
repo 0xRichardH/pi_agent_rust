@@ -48,6 +48,13 @@ fn open_sqlite_connection_read_write(path: &Path) -> Result<Connection> {
     map_sqlite_result(Connection::open(path))
 }
 
+fn open_sqlite_connection_existing_read_write(path: &Path) -> Result<Connection> {
+    map_sqlite_result(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE,
+    ))
+}
+
 fn row_get_string(row: &Row, column: &str) -> Result<String> {
     row.get(column)
         .map_err(|err| Error::session(format!("SQLite row read failed: {err}")))
@@ -55,6 +62,18 @@ fn row_get_string(row: &Row, column: &str) -> Result<String> {
 
 fn rollback_quietly(conn: &Connection) {
     let _ = conn.execute("ROLLBACK", []);
+}
+
+fn require_session_header_exists(conn: &Connection) -> Result<()> {
+    let mut stmt = map_sqlite_result(conn.prepare("SELECT 1 FROM pi_session_header LIMIT 1"))?;
+    let mut rows = map_sqlite_result(stmt.query([]))?;
+    if map_sqlite_result(rows.next())?.is_some() {
+        Ok(())
+    } else {
+        Err(Error::session(
+            "SQLite session append requires an existing header row".to_string(),
+        ))
+    }
 }
 
 fn compute_message_count_and_name(entries: &[SessionEntry]) -> (u64, Option<String>) {
@@ -701,10 +720,11 @@ pub async fn append_entries(
     let metrics = session_metrics::global();
     let _timer = metrics.start_timer(&metrics.sqlite_append);
 
-    let conn = open_sqlite_connection_read_write(path)?;
+    let conn = open_sqlite_connection_existing_read_write(path)?;
 
     // Ensure WAL mode is active and tables exist (especially pi_session_meta for old DBs).
     map_sqlite_result(conn.execute_batch(INIT_SQL))?;
+    require_session_header_exists(&conn)?;
     map_sqlite_result(conn.execute("BEGIN IMMEDIATE", []))?;
 
     let append_result = (|| -> Result<()> {
