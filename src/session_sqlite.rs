@@ -168,11 +168,12 @@ pub async fn load_session_meta(path: &Path) -> Result<SqliteSessionMeta> {
     let meta_rows: Vec<(String, String)> = match conn.prepare(
         "SELECT key,value FROM pi_session_meta WHERE key IN ('message_count','name')",
     ) {
-        Ok(mut stmt) => stmt
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .unwrap_or_default()
-            .collect::<std::result::Result<Vec<_>, rusqlite::Error>>()
-            .unwrap_or_default(),
+        Ok(mut stmt) => {
+            match stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))) {
+                Ok(rows) => rows.collect::<std::result::Result<Vec<_>, rusqlite::Error>>().unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        }
         Err(_) => Vec::new(),
     };
 
@@ -670,7 +671,7 @@ pub async fn save_session(
                 }
                 let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
                 params.push(&seq);
-                params.push(json.as_str());
+                params.push(&json.as_str());
                 seq += 1;
             }
             map_sqlite_result(conn.execute(&sql, rusqlite::params_from_iter(params.iter())))?;
@@ -753,7 +754,7 @@ pub async fn append_entries(
                 }
                 let _ = write!(sql, "(?{},?{})", i * 2 + 1, i * 2 + 2);
                 params.push(&seq);
-                params.push(json.as_str());
+                params.push(&json.as_str());
                 seq += 1;
             }
             map_sqlite_result(conn.execute(&sql, rusqlite::params_from_iter(params.iter())))?;

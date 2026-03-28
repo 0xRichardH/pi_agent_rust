@@ -114,17 +114,16 @@ fn parse_streaming_behavior(value: Option<&Value>) -> Result<Option<StreamingBeh
 }
 
 fn future_with_current_cx<F>(
-    current_cx: asupersync::Cx,
+    _current_cx: asupersync::Cx,
     future: F,
 ) -> impl Future<Output = F::Output> + Send + 'static
 where
     F: Future + Send + 'static,
 {
-    let mut future = Box::pin(future);
-    std::future::poll_fn(move |poll_cx| {
-        let _guard = asupersync::Cx::set_current(Some(current_cx.clone()));
-        future.as_mut().poll(poll_cx)
-    })
+    // Note: asupersync::Cx::set_current is now private (pub(crate)),
+    // so we cannot set the context here. The future will run without
+    // an explicit context scope.
+    future
 }
 
 fn normalize_command_type(command_type: &str) -> &str {

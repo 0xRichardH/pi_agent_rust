@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::session::{Session, SessionEntry, SessionHeader};
 use fs4::fs_std::FileExt;
 use serde::Deserialize;
-use rusqlite::{Connection, OpenFlags, Row};
+use rusqlite::{Connection, Row};
 use std::borrow::Borrow;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
@@ -91,6 +91,8 @@ impl SessionIndex {
             let result = (|| -> Result<()> {
                 let message_count = sqlite_i64_from_u64("message_count", meta.message_count)?;
                 let size_bytes = sqlite_i64_from_u64("size_bytes", meta.size_bytes)?;
+                let message_count_str = message_count.to_string();
+                let size_bytes_str = size_bytes.to_string();
                 conn.execute(
                     "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
@@ -107,9 +109,9 @@ impl SessionIndex {
                         &meta.id,
                         &meta.cwd,
                         &meta.timestamp,
-                        &message_count,
+                        &message_count_str,
                         &meta.last_modified_ms,
-                        &size_bytes,
+                        &size_bytes_str,
                         &meta.name,
                     ],
                 ).map_err(|e| Error::session(format!("Insert failed: {e}")))?;
@@ -236,6 +238,8 @@ impl SessionIndex {
                 for meta in metas {
                     let message_count = sqlite_i64_from_u64("message_count", meta.message_count)?;
                     let size_bytes = sqlite_i64_from_u64("size_bytes", meta.size_bytes)?;
+                    let message_count_str = message_count.to_string();
+                    let size_bytes_str = size_bytes.to_string();
                     conn.execute(
                         "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -244,9 +248,9 @@ impl SessionIndex {
                             &meta.id,
                             &meta.cwd,
                             &meta.timestamp,
-                            &message_count,
+                            &message_count_str,
                             &meta.last_modified_ms,
-                            &size_bytes,
+                            &size_bytes_str,
                             &meta.name,
                         ],
                     ).map_err(|e| Error::session(format!("Insert failed: {e}")))?;
