@@ -412,7 +412,7 @@ fn json_hints(err: &serde_json::Error) -> ErrorHint {
     }
 }
 
-fn sqlite_hints(err: &sqlmodel_core::Error) -> ErrorHint {
+fn sqlite_hints(err: &rusqlite::Error) -> ErrorHint {
     let message = err.to_string();
     if message.contains("locked") {
         return ErrorHint {
