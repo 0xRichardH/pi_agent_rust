@@ -68,6 +68,7 @@ use std::time::Duration;
 
 const WINDOWS_IO_RETRY_LIMIT: usize = 10;
 
+#[cfg(windows)]
 pub fn is_windows_transient_io_error_kind(kind: std::io::ErrorKind) -> bool {
     matches!(
         kind,
@@ -77,6 +78,12 @@ pub fn is_windows_transient_io_error_kind(kind: std::io::ErrorKind) -> bool {
     )
 }
 
+#[cfg(not(windows))]
+pub fn is_windows_transient_io_error_kind(_kind: std::io::ErrorKind) -> bool {
+    false
+}
+
+#[cfg(windows)]
 pub fn retry_io_with_backoff<T, F>(mut op: F) -> std::io::Result<T>
 where
     F: FnMut() -> std::io::Result<T>,
@@ -99,6 +106,15 @@ where
             }
         }
     }
+}
+
+#[cfg(not(windows))]
+pub fn retry_io_with_backoff<T, F>(mut op: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    // On non-Windows platforms, don't retry - just run once
+    op()
 }
 
 // ---------------------------------------------------------------------------
@@ -247,12 +263,24 @@ impl NamedTempFileExt for NamedTempFile {
     ) -> Result<std::fs::File, tempfile::PersistError> {
         let mut attempts = 0;
         let mut tmp = self;
+        let target_path = path.as_ref().to_path_buf();
         loop {
             match tmp.persist(path.as_ref()) {
                 Ok(file) => return Ok(file),
                 Err(e) => {
                     tmp = e.file;
                     let err = e.error;
+                    if err.kind() == std::io::ErrorKind::AlreadyExists {
+                        // Remove the existing file and retry
+                        if attempts < WINDOWS_IO_RETRY_LIMIT {
+                            let _ = std::fs::remove_file(&target_path);
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                (5 * attempts) as u64,
+                            ));
+                            continue;
+                        }
+                    }
                     if is_windows_transient_io_error_kind(err.kind()) {
                         attempts += 1;
                         if attempts > WINDOWS_IO_RETRY_LIMIT {
@@ -287,12 +315,24 @@ impl TempPathExt for tempfile::TempPath {
     fn persist_with_retry<P: AsRef<Path>>(self, path: P) -> Result<(), tempfile::PathPersistError> {
         let mut attempts = 0;
         let mut tmp = self;
+        let target_path = path.as_ref().to_path_buf();
         loop {
             match tmp.persist(path.as_ref()) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     tmp = e.path;
                     let err = e.error;
+                    if err.kind() == std::io::ErrorKind::AlreadyExists {
+                        // Remove the existing file and retry
+                        if attempts < WINDOWS_IO_RETRY_LIMIT {
+                            let _ = std::fs::remove_file(&target_path);
+                            attempts += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(
+                                (5 * attempts) as u64,
+                            ));
+                            continue;
+                        }
+                    }
                     if is_windows_transient_io_error_kind(err.kind()) {
                         attempts += 1;
                         if attempts > WINDOWS_IO_RETRY_LIMIT {

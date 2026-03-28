@@ -323,7 +323,7 @@ impl SessionIndex {
             .map_err(|e| Error::session(format!("Set busy timeout: {e}")))?;
 
         // Set pragmas for performance
-        conn.execute("PRAGMA journal_mode = WAL", [])
+        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))
             .map_err(|e| Error::session(format!("PRAGMA journal_mode: {e}")))?;
         conn.execute("PRAGMA synchronous = NORMAL", [])
             .map_err(|e| Error::session(format!("PRAGMA synchronous: {e}")))?;

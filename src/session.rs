@@ -106,7 +106,7 @@ fn append_jsonl_entries_blocking(
     .map_err(|e| append_error("open", e))?;
 
     retry_io_with_backoff(|| file.lock_exclusive()).map_err(|e| append_error("lock", e))?;
-    retry_io_with_backoff(|| file.write_all(serialized_entries))
+    file.write_all(serialized_entries)
         .map_err(|e| append_error("write", e))?;
     FileExt::unlock(&file).map_err(|e| append_error("unlock", e))?;
 
