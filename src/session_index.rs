@@ -94,7 +94,7 @@ impl SessionIndex {
                 let message_count_str = message_count.to_string();
                 let size_bytes_str = size_bytes.to_string();
                 let last_modified_ms_str = meta.last_modified_ms.to_string();
-                let name_str = meta.name.as_deref().unwrap_or("");
+                let name_str = meta.name.clone().unwrap_or_default();
                 conn.execute(
                     "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
@@ -243,7 +243,7 @@ impl SessionIndex {
                     let message_count_str = message_count.to_string();
                     let size_bytes_str = size_bytes.to_string();
                     let last_modified_ms_str = meta.last_modified_ms.to_string();
-                    let name_str = meta.name.as_deref().unwrap_or("");
+                    let name_str = meta.name.clone().unwrap_or_default();
                     conn.execute(
                         "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
