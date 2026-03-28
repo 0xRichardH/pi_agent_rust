@@ -723,9 +723,12 @@ pub async fn append_entries(
 
     let conn = open_sqlite_connection_existing_read_write(path)?;
 
-    // Ensure WAL mode is active and tables exist (especially pi_session_meta for old DBs).
-    map_sqlite_result(conn.execute_batch(INIT_SQL))?;
+    // Verify this is actually a Pi session DB before doing anything else.
+    // This prevents accidentally modifying non-session SQLite files.
     require_session_header_exists(&conn)?;
+
+    // Only after verifying it's a session DB, ensure WAL mode and tables.
+    map_sqlite_result(conn.execute_batch(INIT_SQL))?;
     map_sqlite_result(conn.execute("BEGIN IMMEDIATE", []))?;
 
     let append_result = (|| -> Result<()> {

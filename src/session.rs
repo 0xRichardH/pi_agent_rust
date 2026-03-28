@@ -1903,17 +1903,36 @@ impl Session {
                     // === Incremental append path ===
                     let new_start = self.persisted_entry_count.load(Ordering::SeqCst);
                     if new_start < self.entries.len() {
-                        crate::session_sqlite::append_entries(
+                        // Try incremental append first, but fall back to full save on any error.
+                        // This handles cases like: DB deleted, corrupted, or not a session DB.
+                        match crate::session_sqlite::append_entries(
                             &path_clone,
                             &self.entries[new_start..],
                             new_start,
                             message_count,
                             session_name.as_deref(),
                         )
-                        .await?;
-                        self.persisted_entry_count
-                            .store(self.entries.len(), Ordering::SeqCst);
-                        self.appends_since_checkpoint += 1;
+                        .await
+                        {
+                            Ok(()) => {
+                                self.persisted_entry_count
+                                    .store(self.entries.len(), Ordering::SeqCst);
+                                self.appends_since_checkpoint += 1;
+                            }
+                            Err(_) => {
+                                // Fall back to full save if append fails
+                                crate::session_sqlite::save_session(
+                                    &path_clone,
+                                    &self.header,
+                                    &self.entries,
+                                )
+                                .await?;
+                                self.persisted_entry_count
+                                    .store(self.entries.len(), Ordering::SeqCst);
+                                self.header_dirty = false;
+                                self.appends_since_checkpoint = 0;
+                            }
+                        }
                     }
                     // No new entries → no-op, nothing to write.
                 }
