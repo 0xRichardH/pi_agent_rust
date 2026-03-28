@@ -94,6 +94,7 @@ impl SessionIndex {
                 let message_count_str = message_count.to_string();
                 let size_bytes_str = size_bytes.to_string();
                 let last_modified_ms_str = meta.last_modified_ms.to_string();
+                let name_str = meta.name.as_deref().unwrap_or("");
                 conn.execute(
                     "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
@@ -113,7 +114,7 @@ impl SessionIndex {
                         &message_count_str,
                         &last_modified_ms_str,
                         &size_bytes_str,
-                        &meta.name,
+                        &name_str,
                     ],
                 ).map_err(|e| Error::session(format!("Insert failed: {e}")))?;
 
@@ -143,7 +144,7 @@ impl SessionIndex {
         self.with_lock(|conn| {
             init_schema(conn)?;
 
-            let mut stmt = if let Some(cwd) = cwd {
+            let mut stmt = if let Some(_cwd) = cwd {
                 conn.prepare(
                     "SELECT path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name
                      FROM sessions WHERE cwd=?1 ORDER BY last_modified_ms DESC",
@@ -242,6 +243,7 @@ impl SessionIndex {
                     let message_count_str = message_count.to_string();
                     let size_bytes_str = size_bytes.to_string();
                     let last_modified_ms_str = meta.last_modified_ms.to_string();
+                    let name_str = meta.name.as_deref().unwrap_or("");
                     conn.execute(
                         "INSERT INTO sessions (path,id,cwd,timestamp,message_count,last_modified_ms,size_bytes,name)
                          VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -253,7 +255,7 @@ impl SessionIndex {
                             &message_count_str,
                             &last_modified_ms_str,
                             &size_bytes_str,
-                            &meta.name,
+                            &name_str,
                         ],
                     ).map_err(|e| Error::session(format!("Insert failed: {e}")))?;
                 }
